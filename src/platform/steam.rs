@@ -157,13 +157,10 @@ impl SteamProvider {
         if let Some(exe) = exe_finder::pick_executable(&app.name, &app.installdir, &candidates) {
             icons.push(IconCandidate::Executable(install_dir.join(&exe.rel_path)));
         }
-        icons.push(IconCandidate::ImageFile(
-            self.root
-                .join("appcache")
-                .join("librarycache")
-                .join(&app.appid)
-                .join("logo.png"),
-        ));
+        let cache_dir = self.root.join("appcache").join("librarycache").join(&app.appid);
+        if let Some(image) = pick_library_image(&cache_dir) {
+            icons.push(IconCandidate::ImageFile(image));
+        }
         icons.push(IconCandidate::Fallback(self.root.join("steam.exe")));
 
         Game {
@@ -175,6 +172,34 @@ impl SteamProvider {
             icon_candidates: icons,
         }
     }
+}
+
+/// Picks an image file from a game's Steam library-cache directory.
+///
+/// Recent Steam clients name most assets after a content hash, often with no
+/// extension at all, so the well-known filenames are tried first and the
+/// largest remaining regular file is the last resort. Returns `None` — never
+/// a path that hasn't been confirmed to exist — when the directory is
+/// missing or contains no regular files, so callers can fall through to
+/// their own fallback instead of pointing at nothing.
+pub(crate) fn pick_library_image(dir: &Path) -> Option<PathBuf> {
+    const PREFERRED: [&str; 2] = ["logo.png", "library_600x900.jpg"];
+    for name in PREFERRED {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    let entries = std::fs::read_dir(dir).ok()?;
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok()?;
+            meta.is_file().then(|| (entry.path(), meta.len()))
+        })
+        .max_by_key(|(_, size)| *size)
+        .map(|(path, _)| path)
 }
 
 #[cfg(test)]
@@ -243,6 +268,66 @@ mod tests {
         let launch = p.launch_for("440");
         assert_eq!(launch.program, PathBuf::from(r"C:\Steam\steam.exe"));
         assert_eq!(launch.args, "-applaunch 440");
+    }
+
+    /// Gives each test its own scratch directory under the OS temp dir,
+    /// wiped clean first so a leftover run never leaks into this one.
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("wso_steam_libcache_{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn library_image_prefers_logo_png() {
+        let dir = scratch_dir("prefers_logo");
+        std::fs::write(dir.join("library_600x900.jpg"), vec![0u8; 500]).unwrap();
+        std::fs::write(dir.join("logo.png"), vec![0u8; 10]).unwrap();
+
+        assert_eq!(pick_library_image(&dir), Some(dir.join("logo.png")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn library_image_falls_back_to_600x900_when_logo_missing() {
+        let dir = scratch_dir("falls_back_600x900");
+        std::fs::write(
+            dir.join("c3dff088e090f81d6e3d88eabbb67732647c69cf"),
+            vec![0u8; 999_999],
+        )
+        .unwrap();
+        std::fs::write(dir.join("library_600x900.jpg"), vec![0u8; 10]).unwrap();
+
+        assert_eq!(
+            pick_library_image(&dir),
+            Some(dir.join("library_600x900.jpg"))
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn library_image_picks_the_largest_extensionless_file_as_last_resort() {
+        let dir = scratch_dir("largest_extensionless");
+        std::fs::write(dir.join("a1b2c3d4e5f6"), vec![0u8; 100]).unwrap();
+        std::fs::write(dir.join("f6e5d4c3b2a1"), vec![0u8; 500]).unwrap();
+
+        assert_eq!(pick_library_image(&dir), Some(dir.join("f6e5d4c3b2a1")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn library_image_is_none_for_an_empty_directory() {
+        let dir = scratch_dir("empty");
+        assert_eq!(pick_library_image(&dir), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn library_image_is_none_for_a_missing_directory() {
+        let dir = std::env::temp_dir().join("wso_steam_libcache_does_not_exist");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(pick_library_image(&dir), None);
     }
 }
 

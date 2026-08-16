@@ -35,6 +35,13 @@ fn discovers_games_and_filters_infrastructure() {
         vec![0u8; 100],
     )
     .unwrap();
+    write(
+        root.join("appcache")
+            .join("librarycache")
+            .join("105600")
+            .join("logo.png"),
+        "not a real png, just needs to exist",
+    );
 
     let games = SteamProvider::from_root(root.clone()).games().unwrap();
 
@@ -43,7 +50,7 @@ fn discovers_games_and_filters_infrastructure() {
     assert_eq!(games[0].id, "105600");
     assert_eq!(games[0].launch.args, "-applaunch 105600");
     assert_eq!(games[0].launch.program, root.join("steam.exe"));
-    assert_eq!(games[0].icon_candidates.len(), 3, "exe, librarycache, fallback");
+    assert_eq!(games[0].icon_candidates.len(), 3, "exe, librarycache logo.png, fallback");
 
     fs::remove_dir_all(&tmp).unwrap();
 }
