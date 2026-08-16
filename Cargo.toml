@@ -1,0 +1,10 @@
+[package]
+name = "winshortcuts-organizer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[[bin]]
+name = "wso"
+path = "src/main.rs"
