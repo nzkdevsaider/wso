@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
-use winshortcuts_organizer::platform::{epic::EpicProvider, GameProvider};
+use winshortcuts_organizer::platform::epic::{launch_uri, EpicProvider};
+use winshortcuts_organizer::platform::GameProvider;
 
 #[test]
 fn reads_manifests_and_filters_non_games() {
@@ -31,8 +32,35 @@ fn reads_manifests_and_filters_non_games() {
 
     assert_eq!(games.len(), 1);
     assert_eq!(games[0].name, "Fall Guys");
-    assert!(games[0].launch.args.contains("0a2d9f%3Aabc123%3A9c88"));
+    assert_eq!(
+        games[0].launch.args,
+        format!("\"{}\"", launch_uri("0a2d9f", "abc123", "9c88"))
+    );
     assert!(games[0].launch.program.ends_with("explorer.exe"));
+
+    fs::remove_dir_all(&tmp).unwrap();
+}
+
+#[test]
+fn skips_malformed_manifest() {
+    let tmp = std::env::temp_dir().join("wso_epic_provider_malformed_test");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+
+    // Missing required field (CatalogItemId)
+    fs::write(
+        tmp.join("malformed.item"),
+        r#"{"DisplayName":"Bad Manifest","InstallLocation":"D:\\Epic\\Bad",
+            "LaunchExecutable":"bad.exe","AppName":"bad",
+            "CatalogNamespace":"n","AppCategories":["games"]}"#,
+    )
+    .unwrap();
+
+    let games = EpicProvider::from_dirs(tmp.clone(), PathBuf::from("launcher.exe"))
+        .games()
+        .unwrap();
+
+    assert_eq!(games.len(), 0);
 
     fs::remove_dir_all(&tmp).unwrap();
 }

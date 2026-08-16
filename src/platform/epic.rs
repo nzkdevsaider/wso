@@ -40,7 +40,7 @@ impl Manifest {
 /// A `.lnk` cannot target a protocol URI, so the shortcut runs Explorer and
 /// hands it the URI. Launching through the URI rather than the executable
 /// preserves Epic's own launch handling and entitlement checks.
-pub(crate) fn launch_uri(namespace: &str, catalog_item_id: &str, app_name: &str) -> String {
+pub fn launch_uri(namespace: &str, catalog_item_id: &str, app_name: &str) -> String {
     format!(
         "com.epicgames.launcher://apps/{namespace}%3A{catalog_item_id}%3A{app_name}?action=launch&silent=true"
     )
@@ -150,7 +150,7 @@ mod tests {
     const DLC_ITEM: &str = r#"{
         "DisplayName": "Some Addon",
         "InstallLocation": "D:\\Epic\\Addon",
-        "LaunchExecutable": "",
+        "LaunchExecutable": "addon.exe",
         "AppName": "addon1",
         "CatalogNamespace": "ns",
         "CatalogItemId": "cid",
@@ -169,6 +169,17 @@ mod tests {
         "bIsIncompleteInstall": true
     }"#;
 
+    const EMPTY_EXECUTABLE_ITEM: &str = r#"{
+        "DisplayName": "No Executable",
+        "InstallLocation": "D:\\Epic\\NoExe",
+        "LaunchExecutable": "",
+        "AppName": "noexe1",
+        "CatalogNamespace": "ns",
+        "CatalogItemId": "cid",
+        "AppCategories": ["games"],
+        "bIsIncompleteInstall": false
+    }"#;
+
     #[test]
     fn accepts_a_game_manifest() {
         let m: Manifest = serde_json::from_str(GAME_ITEM).unwrap();
@@ -185,6 +196,12 @@ mod tests {
     #[test]
     fn rejects_incomplete_installs() {
         let m: Manifest = serde_json::from_str(INCOMPLETE_ITEM).unwrap();
+        assert!(!m.is_installed_game());
+    }
+
+    #[test]
+    fn rejects_empty_launch_executable() {
+        let m: Manifest = serde_json::from_str(EMPTY_EXECUTABLE_ITEM).unwrap();
         assert!(!m.is_installed_game());
     }
 
