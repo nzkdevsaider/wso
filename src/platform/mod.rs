@@ -1,3 +1,5 @@
+pub mod vdf;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Platform {
     Steam,
