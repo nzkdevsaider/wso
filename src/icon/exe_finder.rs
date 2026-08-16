@@ -280,4 +280,40 @@ mod tests {
         assert_eq!(c(r"bin\a.exe", 1).depth(), 2);
         assert_eq!(c(r"a\b\c\d.exe", 1).depth(), 4);
     }
+
+    /// Synthetic, unlike the fixtures above: no candidate pair in the real
+    /// nine-game library actually reaches the size comparison — every real
+    /// case is already decided by depth, by the blocklist, or by an unequal
+    /// name score first. Both stems here are unrelated to the game/install
+    /// names, so `name_score` ties at 0 for both and `size` is left as the
+    /// only thing that can decide it. This exists purely to prove the size
+    /// term in the `max_by_key` tuple is reachable and actually decisive.
+    #[test]
+    fn size_breaks_a_tie_when_name_scores_are_equal() {
+        // The larger candidate is listed first and the smaller one last on
+        // purpose: `Iterator::max_by_key` returns the *last* maximal element
+        // on a tie, so if size were not actually compared, "last item in the
+        // slice" would accidentally produce the same answer as "largest
+        // size" when the bigger one is placed last. Putting it first instead
+        // means only a real size comparison can make this pass.
+        let cands = [c(r"tools\launcher.exe", 500), c(r"bin\launcher.exe", 100)];
+        assert_eq!(
+            pick("Some Game", "SomeGame", &cands),
+            r"tools\launcher.exe"
+        );
+    }
+
+    /// The ancestor-directory blocklist must exclude a decoy even when that
+    /// decoy shares the real game's exact name (so it would otherwise tie on
+    /// name score and win outright on size), and must do so
+    /// case-insensitively: the path segment here is `_CommonRedist`, the
+    /// constant is `_commonredist`.
+    #[test]
+    fn excludes_a_decoy_inside_a_blocklisted_directory_case_insensitively() {
+        let cands = [
+            c(r"_CommonRedist\Game.exe", 999_999),
+            c(r"bin\Game.exe", 100),
+        ];
+        assert_eq!(pick("Game", "Game", &cands), r"bin\Game.exe");
+    }
 }
