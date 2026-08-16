@@ -291,8 +291,14 @@ mod tests {
 
     #[test]
     fn parses_escaped_non_ascii_character() {
-        let v = parse("\"AppState\"\n{\n\"name\"\t\"Café\"\n}\n").unwrap();
+        // Build input string with an actual backslash before the UTF-8 character.
+        // This tests the escape branch's UTF-8 handling.
+        let mut input = String::from("\"AppState\"\n{\n\"name\"\t\"Caf");
+        input.push('\\');  // Add the backslash that the parser will encounter
+        input.push_str("é\"\n}\n");  // Add the multi-byte character
+        let v = parse(&input).unwrap();
         let state = v.get("AppState").unwrap();
+        // The escape branch decodes the multi-byte character, consuming the backslash.
         assert_eq!(state.get("name").unwrap().as_str(), Some("Café"));
     }
 
@@ -303,5 +309,23 @@ mod tests {
             deep.push_str("\"k\"\n{\n");
         }
         assert!(matches!(parse(&deep), Err(VdfError::NestedTooDeep)));
+    }
+
+    #[test]
+    fn allows_sibling_blocks_at_depth_limit() {
+        // Test that depth is properly decremented so sibling blocks do not accumulate.
+        // Build a structure with sequential nested blocks that reuse the same depth level.
+        let v = parse(
+            "\"root\"\n{\n\
+             \"block1\" { \"key\" \"val1\" }\n\
+             \"block2\" { \"key\" \"val2\" }\n\
+             \"block3\" { \"key\" \"val3\" }\n\
+             }\n"
+        ).unwrap();
+        let root = v.get("root").unwrap();
+        assert_eq!(root.entries().len(), 3);
+        assert_eq!(root.get("block1").unwrap().get("key").unwrap().as_str(), Some("val1"));
+        assert_eq!(root.get("block2").unwrap().get("key").unwrap().as_str(), Some("val2"));
+        assert_eq!(root.get("block3").unwrap().get("key").unwrap().as_str(), Some("val3"));
     }
 }
