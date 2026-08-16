@@ -270,10 +270,19 @@ mod tests {
         assert_eq!(launch.args, "-applaunch 440");
     }
 
-    /// Gives each test its own scratch directory under the OS temp dir,
-    /// wiped clean first so a leftover run never leaks into this one.
-    fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("wso_steam_libcache_{name}"));
+    /// Gives each test its own scratch directory under the OS temp dir. The
+    /// caller-supplied label is combined with this process's id and an
+    /// atomically incremented counter so the name is unique both across
+    /// concurrent `cargo test` processes (e.g. two collaborators or CI jobs
+    /// sharing a runner) and across parallel test threads within one
+    /// process; a fixed name would let them collide.
+    fn scratch_dir(label: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        let pid = std::process::id();
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("wso_steam_libcache_{label}_{pid}_{n}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -325,8 +334,10 @@ mod tests {
 
     #[test]
     fn library_image_is_none_for_a_missing_directory() {
-        let dir = std::env::temp_dir().join("wso_steam_libcache_does_not_exist");
-        let _ = std::fs::remove_dir_all(&dir);
+        // A directory that is guaranteed not to exist: built the same way as
+        // `scratch_dir` but deliberately never created.
+        let dir = scratch_dir("does_not_exist");
+        std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(pick_library_image(&dir), None);
     }
 }

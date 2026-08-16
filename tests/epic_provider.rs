@@ -3,9 +3,11 @@ use std::path::PathBuf;
 use winshortcuts_organizer::platform::epic::{launch_uri, EpicProvider};
 use winshortcuts_organizer::platform::GameProvider;
 
+mod common;
+
 #[test]
 fn reads_manifests_and_filters_non_games() {
-    let tmp = std::env::temp_dir().join("wso_epic_provider_test");
+    let tmp = common::unique_temp_dir("epic_provider_test");
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).unwrap();
 
@@ -43,7 +45,7 @@ fn reads_manifests_and_filters_non_games() {
 
 #[test]
 fn skips_malformed_manifest() {
-    let tmp = std::env::temp_dir().join("wso_epic_provider_malformed_test");
+    let tmp = common::unique_temp_dir("epic_provider_malformed_test");
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).unwrap();
 

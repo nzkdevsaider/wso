@@ -2,6 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 use winshortcuts_organizer::platform::{steam::SteamProvider, GameProvider};
 
+mod common;
+
 fn write(path: PathBuf, contents: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, contents).unwrap();
@@ -9,7 +11,7 @@ fn write(path: PathBuf, contents: &str) {
 
 #[test]
 fn discovers_games_and_filters_infrastructure() {
-    let tmp = std::env::temp_dir().join("wso_steam_provider_test");
+    let tmp = common::unique_temp_dir("steam_provider_test");
     let _ = fs::remove_dir_all(&tmp);
     let root = tmp.join("Steam");
 

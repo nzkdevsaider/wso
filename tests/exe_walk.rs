@@ -1,9 +1,11 @@
 use std::fs;
 use winshortcuts_organizer::icon::exe_finder::{collect_candidates, pick_executable};
 
+mod common;
+
 #[test]
 fn walks_a_real_directory_and_picks_the_game() {
-    let tmp = std::env::temp_dir().join("wso_exe_walk_test");
+    let tmp = common::unique_temp_dir("exe_walk_test");
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(tmp.join("bin").join("win64")).unwrap();
     fs::write(tmp.join("gmod.exe"), vec![0u8; 400]).unwrap();
