@@ -193,7 +193,7 @@ A `[icons]` table in `config.toml` lets the user override the resolved icon per 
 
 Epic writes one JSON manifest per installed item to `C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests\*.item`, containing `DisplayName`, `InstallLocation`, `LaunchExecutable`, `AppName`, `CatalogNamespace`, `CatalogItemId` and `AppCategories`. Plain JSON — no custom parser needed.
 
-Items are kept only when `AppCategories` contains `games`, which excludes DLC, plugins and Unreal Engine installs. Items flagged as incomplete installs are skipped with a reason.
+Items are kept only when all three of these hold: `AppCategories` contains `games`, which excludes DLC, plugins and Unreal Engine installs; the item is not flagged as an incomplete install; and `LaunchExecutable` is non-empty. The third condition matters because that executable is the item's only icon source, so an entry without one yields nothing to display and is almost certainly not a playable title. Each condition must be isolated by its own test — a fixture that fails two conditions at once proves neither.
 
 A `.lnk` cannot target a protocol URI. Epic launches through Explorer:
 
