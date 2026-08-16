@@ -4,6 +4,7 @@ use std::fmt;
 pub enum VdfError {
     UnexpectedEnd,
     UnexpectedToken(String),
+    NestedTooDeep,
 }
 
 impl fmt::Display for VdfError {
@@ -11,6 +12,7 @@ impl fmt::Display for VdfError {
         match self {
             VdfError::UnexpectedEnd => write!(f, "unexpected end of VDF input"),
             VdfError::UnexpectedToken(t) => write!(f, "unexpected token in VDF: {t}"),
+            VdfError::NestedTooDeep => write!(f, "VDF nesting exceeded maximum depth"),
         }
     }
 }
@@ -52,7 +54,7 @@ impl Value {
 /// Parses Steam's text keyvalues format, as used by `libraryfolders.vdf` and
 /// `appmanifest_*.acf`. The binary VDF variant is deliberately not supported.
 pub fn parse(input: &str) -> Result<Value, VdfError> {
-    let mut p = Parser { bytes: input.as_bytes(), pos: 0 };
+    let mut p = Parser { bytes: input.as_bytes(), pos: 0, depth: 0 };
     let entries = p.parse_entries(true)?;
     Ok(Value::Obj(entries))
 }
@@ -60,6 +62,19 @@ pub fn parse(input: &str) -> Result<Value, VdfError> {
 struct Parser<'a> {
     bytes: &'a [u8],
     pos: usize,
+    depth: usize,
+}
+
+const MAX_NESTING_DEPTH: usize = 64;
+
+fn utf8_width(lead: u8) -> usize {
+    match lead {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => 1, // continuation or invalid lead; the from_utf8 below rejects it
+    }
 }
 
 impl<'a> Parser<'a> {
@@ -88,7 +103,13 @@ impl<'a> Parser<'a> {
                         Some(b'"') => entries.push((key, Value::Str(self.parse_string()?))),
                         Some(b'{') => {
                             self.pos += 1;
-                            entries.push((key, Value::Obj(self.parse_entries(false)?)));
+                            if self.depth >= MAX_NESTING_DEPTH {
+                                return Err(VdfError::NestedTooDeep);
+                            }
+                            self.depth += 1;
+                            let obj = self.parse_entries(false)?;
+                            self.depth -= 1;
+                            entries.push((key, Value::Obj(obj)));
                         }
                         None => return Err(VdfError::UnexpectedEnd),
                         Some(c) => {
@@ -116,16 +137,33 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     match self.peek() {
                         None => return Err(VdfError::UnexpectedEnd),
-                        Some(b'n') => out.push('\n'),
-                        Some(b't') => out.push('\t'),
-                        Some(c) => out.push(c as char),
+                        Some(b'n') => {
+                            out.push('\n');
+                            self.pos += 1;
+                        }
+                        Some(b't') => {
+                            out.push('\t');
+                            self.pos += 1;
+                        }
+                        Some(_) => {
+                            // Decode escaped non-ASCII characters as UTF-8.
+                            let lead = self.bytes[self.pos];
+                            let width = utf8_width(lead);
+                            let end = std::cmp::min(self.pos + width, self.bytes.len());
+                            let window = &self.bytes[self.pos..end];
+                            let s = std::str::from_utf8(window).map_err(|_| VdfError::UnexpectedEnd)?;
+                            let ch = s.chars().next().ok_or(VdfError::UnexpectedEnd)?;
+                            out.push(ch);
+                            self.pos += ch.len_utf8();
+                        }
                     }
-                    self.pos += 1;
                 }
-                Some(_) => {
+                Some(lead) => {
                     // Advance one full UTF-8 character so non-ASCII titles survive.
-                    let rest = &self.bytes[self.pos..];
-                    let s = std::str::from_utf8(rest).map_err(|_| VdfError::UnexpectedEnd)?;
+                    let width = utf8_width(lead);
+                    let end = std::cmp::min(self.pos + width, self.bytes.len());
+                    let window = &self.bytes[self.pos..end];
+                    let s = std::str::from_utf8(window).map_err(|_| VdfError::UnexpectedEnd)?;
                     let ch = s.chars().next().ok_or(VdfError::UnexpectedEnd)?;
                     out.push(ch);
                     self.pos += ch.len_utf8();
@@ -235,5 +273,35 @@ mod tests {
     #[test]
     fn reports_unterminated_string() {
         assert!(matches!(parse("\"root"), Err(VdfError::UnexpectedEnd)));
+    }
+
+    #[test]
+    fn parses_non_ascii_title_overwatch() {
+        let v = parse("\"AppState\"\n{\n\"name\"\t\"Overwatch®\"\n}\n").unwrap();
+        let state = v.get("AppState").unwrap();
+        assert_eq!(state.get("name").unwrap().as_str(), Some("Overwatch®"));
+    }
+
+    #[test]
+    fn parses_non_ascii_title_helldivers() {
+        let v = parse("\"AppState\"\n{\n\"name\"\t\"HELLDIVERS™ 2\"\n}\n").unwrap();
+        let state = v.get("AppState").unwrap();
+        assert_eq!(state.get("name").unwrap().as_str(), Some("HELLDIVERS™ 2"));
+    }
+
+    #[test]
+    fn parses_escaped_non_ascii_character() {
+        let v = parse("\"AppState\"\n{\n\"name\"\t\"Café\"\n}\n").unwrap();
+        let state = v.get("AppState").unwrap();
+        assert_eq!(state.get("name").unwrap().as_str(), Some("Café"));
+    }
+
+    #[test]
+    fn rejects_excessive_nesting_depth() {
+        let mut deep = String::from("\"root\"\n{\n");
+        for _ in 0..70 {
+            deep.push_str("\"k\"\n{\n");
+        }
+        assert!(matches!(parse(&deep), Err(VdfError::NestedTooDeep)));
     }
 }
