@@ -210,7 +210,9 @@ Epic declares `LaunchExecutable` explicitly, so `InstallLocation/LaunchExecutabl
 
 The shared resolver walks each game's ordered candidates and takes the first that validates. Validation means: the file exists, and for an `.exe` it actually contains an icon resource (`RT_GROUP_ICON`) — checked by reading the PE resource directory. An executable with no icon falls through rather than producing a generic blank.
 
-**Steam:** game executable → `librarycache/<appid>/logo.png` converted to `.ico` and written to `%LOCALAPPDATA%\WinShortcutsOrganizer\icons\<appid>.ico` → `steam.exe`.
+**Steam:** game executable → the best image found in `librarycache/<appid>/`, converted to `.ico` and written to `%LOCALAPPDATA%\WinShortcutsOrganizer\icons\<appid>.ico` → `steam.exe`.
+
+The image must be located by scanning that directory, not by assuming a filename. Verified against a real nine-game library: only six had `logo.png`. The other three — Helldivers 2, Monster Hunter Wilds and Overwatch — held content-hash filenames instead, several with no extension at all, which is how current Steam clients name library assets. Preference order is `logo.png`, then `library_600x900.jpg`, then the largest remaining file. Because extensionless files are normal here, the converter must detect image format from content rather than from the file extension.
 
 **Epic:** declared executable → `EpicGamesLauncher.exe`.
 
