@@ -4,7 +4,7 @@
 
 use crate::shortcut::signature::Signature;
 use crate::shortcut::LnkData;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesiredShortcut {
@@ -57,6 +57,80 @@ pub enum Action {
         path: PathBuf,
         reason: SkipReason,
     },
+}
+
+/// Folds a path into the form two spellings of the same Windows path agree
+/// on: separators normalized to `\`, and ASCII letters lowercased.
+///
+/// Pure string work — no `canonicalize`, no metadata lookup, nothing that
+/// touches the filesystem — because `plan()` must stay pure (spec §5), and
+/// because the paths being compared can name files that do not exist on this
+/// machine at all.
+///
+/// ASCII-only case folding, matching the `eq_ignore_ascii_case` idiom already
+/// used for extensions elsewhere in the crate. Windows' own case-insensitivity
+/// extends past ASCII, so this is the conservative direction: at worst two
+/// spellings that Windows would consider equal are reported as different,
+/// which costs a redundant rewrite, never a missed one.
+fn path_key(p: &Path) -> String {
+    p.to_string_lossy()
+        .chars()
+        .map(|c| {
+            if c == '/' {
+                '\\'
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect()
+}
+
+/// Whether two paths name the same thing, tolerating the two ways a shortcut's
+/// stored path can differ from the one a provider hands us for reasons that
+/// have nothing to do with the shortcut being wrong.
+///
+/// Windows resolves a shell link's local-file target and working directory to
+/// the actual on-disk casing when the link is saved — that is how links stay
+/// valid across a case rename — so what `read_lnk` returns need not match the
+/// string that was written. `tests/lnk_roundtrip.rs` carries a `canonical()`
+/// helper introduced for exactly this: a machine whose `%WINDIR%` reads
+/// `C:\WINDOWS` while the disk entry is `C:\Windows`. Providers supply raw
+/// paths from their own sources — `SteamProvider::detect` tries
+/// `HKCU\Software\Valve\Steam\SteamPath` first, which conventionally holds a
+/// lowercase forward-slash path — so the two sides can legitimately disagree
+/// on case or separator while naming the same file.
+///
+/// Comparing them raw makes every run emit a `Retarget` for every affected
+/// shortcut, forever: rewriting one that was already correct, reporting churn
+/// that never converges, and burying any genuine change in the noise.
+///
+/// This is reproduced, not hypothetical, though not through the registry
+/// route it was first suspected of. `EpicProvider::explorer()` builds its
+/// launch program from `%WINDIR%`, and on the maintainer's machine `%WINDIR%`
+/// reads `C:\WINDOWS` while the directory on disk is `C:\Windows`. Windows
+/// stores the resolved on-disk casing when the link is saved, so every Epic
+/// shortcut comes back spelled differently from the way it was asked for.
+/// `tests/idempotence.rs` fails on exactly that when this comparison is
+/// reverted to `!=`. A Steam-only library does not show it, because Steam's
+/// root comes from a conventional path that already matches the disk — which
+/// is why two consecutive `sync` runs there reported `0 changes, 9
+/// unchanged`.
+///
+/// Deliberately not applied to `path`: where a shortcut *file* lives decides
+/// `Move` and `DeleteOrphan`, and those must keep comparing exactly.
+fn same_path(a: &Path, b: &Path) -> bool {
+    path_key(a) == path_key(b)
+}
+
+/// [`same_path`] lifted over `Option`, for `working_dir`. `None` and `Some`
+/// remain different: a shortcut that has lost its working directory is
+/// genuinely out of sync.
+fn same_optional_path(a: &Option<PathBuf>, b: &Option<PathBuf>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => same_path(a, b),
+        _ => false,
+    }
 }
 
 /// Reconciles what should exist against what this tool already owns.
@@ -121,9 +195,9 @@ pub fn plan(desired: &[DesiredShortcut], owned: &[OwnedShortcut]) -> Vec<Action>
                 to: d.path.clone(),
                 lnk: d.lnk.clone(),
             });
-        } else if o.lnk.target != d.lnk.target
+        } else if !same_path(&o.lnk.target, &d.lnk.target)
             || o.lnk.args != d.lnk.args
-            || o.lnk.working_dir != d.lnk.working_dir
+            || !same_optional_path(&o.lnk.working_dir, &d.lnk.working_dir)
             || o.lnk.description != d.lnk.description
         {
             // `description` is grouped with the launch-command fields, not
@@ -228,14 +302,161 @@ mod tests {
         ));
     }
 
+    // `is_idempotent` used to live here: it called a pure function twice
+    // with the same arguments and asserted the two results had equal
+    // lengths, which no change to `plan()` could ever make fail. The real
+    // property spec §12 asks for — write a shortcut, read it back off disk,
+    // re-plan, and get nothing but `Skip` — cannot be checked without a
+    // filesystem round trip, so it lives in `tests/idempotence.rs` instead.
+
+    /// Windows resolves a shell link's local-file target to the actual
+    /// on-disk casing when it is saved, so `read_lnk` can hand back
+    /// `C:\WINDOWS\explorer.exe` where the provider supplied
+    /// `C:\Windows\explorer.exe`. Compared raw, that is a `Retarget` — on
+    /// every run, forever, rewriting a shortcut that was already correct.
+    /// Nothing but case differs here, and `path` and `icon` are identical, so
+    /// only case-insensitive comparison of `target` can produce a `Skip`.
     #[test]
-    fn is_idempotent() {
-        let d = [desired("440", r"C:\D\TF2.lnk", "tf2.exe")];
-        let o = [owned("440", r"C:\D\TF2.lnk", "tf2.exe")];
-        let first = plan(&d, &o);
-        let second = plan(&d, &o);
-        assert_eq!(first.len(), second.len());
-        assert!(first.iter().all(|a| matches!(a, Action::Skip { .. })));
+    fn a_target_differing_only_in_letter_case_is_not_a_change() {
+        let d = [DesiredShortcut {
+            sig: sig("440"),
+            path: PathBuf::from(r"C:\D\TF2.lnk"),
+            lnk: lnk(r"C:\Windows\explorer.exe", "-applaunch 440", "tf2.exe"),
+        }];
+        let o = [OwnedShortcut {
+            sig: sig("440"),
+            path: PathBuf::from(r"C:\D\TF2.lnk"),
+            lnk: lnk(r"C:\WINDOWS\explorer.exe", "-applaunch 440", "tf2.exe"),
+        }];
+        assert!(matches!(
+            plan(&d, &o).as_slice(),
+            [Action::Skip {
+                reason: SkipReason::UpToDate,
+                ..
+            }]
+        ));
+    }
+
+    /// The other spelling difference the same paths can pick up:
+    /// `SteamProvider::detect` reads `HKCU\Software\Valve\Steam\SteamPath`
+    /// first, which conventionally holds a forward-slash path, while a saved
+    /// shell link stores backslashes. Both spellings name the same file.
+    #[test]
+    fn a_target_differing_only_in_path_separator_is_not_a_change() {
+        let d = [DesiredShortcut {
+            sig: sig("440"),
+            path: PathBuf::from(r"C:\D\TF2.lnk"),
+            lnk: lnk(
+                "c:/program files (x86)/steam/steam.exe",
+                "-applaunch 440",
+                "tf2.exe",
+            ),
+        }];
+        let o = [OwnedShortcut {
+            sig: sig("440"),
+            path: PathBuf::from(r"C:\D\TF2.lnk"),
+            lnk: lnk(
+                r"C:\Program Files (x86)\Steam\steam.exe",
+                "-applaunch 440",
+                "tf2.exe",
+            ),
+        }];
+        assert!(matches!(
+            plan(&d, &o).as_slice(),
+            [Action::Skip {
+                reason: SkipReason::UpToDate,
+                ..
+            }]
+        ));
+    }
+
+    /// The guard on the two tests above: the comparison must still be a
+    /// comparison. These two targets are different files, not two spellings
+    /// of one, and a helper that folded everything together — or was wired up
+    /// to always return `true` — would report `Skip` here too.
+    #[test]
+    fn a_genuinely_different_target_is_still_a_retarget() {
+        let d = [DesiredShortcut {
+            sig: sig("440"),
+            path: PathBuf::from(r"C:\D\TF2.lnk"),
+            lnk: lnk(r"D:\Steam\steam.exe", "-applaunch 440", "tf2.exe"),
+        }];
+        let o = [OwnedShortcut {
+            sig: sig("440"),
+            path: PathBuf::from(r"C:\D\TF2.lnk"),
+            lnk: lnk(r"C:\Steam\steam.exe", "-applaunch 440", "tf2.exe"),
+        }];
+        assert!(matches!(plan(&d, &o).as_slice(), [Action::Retarget { .. }]));
+    }
+
+    /// `working_dir` is saved and resolved by Windows the same way `target`
+    /// is, so it needs the same tolerance. `target` is identical here, which
+    /// means only the `working_dir` comparison can decide the outcome.
+    #[test]
+    fn a_working_directory_differing_only_in_case_is_not_a_change() {
+        let same = lnk(r"C:\Steam\steam.exe", "-applaunch 440", "tf2.exe");
+        let d = [DesiredShortcut {
+            sig: sig("440"),
+            path: PathBuf::from(r"C:\D\TF2.lnk"),
+            lnk: LnkData {
+                working_dir: Some(PathBuf::from(r"C:\Steam")),
+                ..same.clone()
+            },
+        }];
+        let o = [OwnedShortcut {
+            sig: sig("440"),
+            path: PathBuf::from(r"C:\D\TF2.lnk"),
+            lnk: LnkData {
+                working_dir: Some(PathBuf::from(r"c:\steam")),
+                ..same
+            },
+        }];
+        assert!(matches!(
+            plan(&d, &o).as_slice(),
+            [Action::Skip {
+                reason: SkipReason::UpToDate,
+                ..
+            }]
+        ));
+    }
+
+    /// A shortcut that has lost its working directory entirely is genuinely
+    /// out of sync — `None` must never fold together with `Some`, however
+    /// forgiving the comparison of two `Some`s is.
+    #[test]
+    fn a_working_directory_that_disappeared_is_still_a_retarget() {
+        let same = lnk(r"C:\Steam\steam.exe", "-applaunch 440", "tf2.exe");
+        let d = [DesiredShortcut {
+            sig: sig("440"),
+            path: PathBuf::from(r"C:\D\TF2.lnk"),
+            lnk: LnkData {
+                working_dir: Some(PathBuf::from(r"C:\Steam")),
+                ..same.clone()
+            },
+        }];
+        let o = [OwnedShortcut {
+            sig: sig("440"),
+            path: PathBuf::from(r"C:\D\TF2.lnk"),
+            lnk: LnkData {
+                working_dir: None,
+                ..same
+            },
+        }];
+        assert!(matches!(plan(&d, &o).as_slice(), [Action::Retarget { .. }]));
+    }
+
+    /// Where a shortcut *file* lives decides `Move` and `DeleteOrphan`, so
+    /// `path` keeps comparing exactly. Two directories differing only in case
+    /// would be the same directory on Windows, but folding them here would
+    /// mean `plan()` silently deciding not to relocate a shortcut the user
+    /// asked to relocate — and the same fold applied to `DeleteOrphan` would
+    /// change which file gets deleted. A redundant `Move` is cheap; guessing
+    /// wrong about a deletion is not.
+    #[test]
+    fn a_destination_path_differing_only_in_case_is_still_a_move() {
+        let d = [desired("440", r"C:\Desktop\TF2.lnk", "tf2.exe")];
+        let o = [owned("440", r"C:\DESKTOP\TF2.lnk", "tf2.exe")];
+        assert!(matches!(plan(&d, &o).as_slice(), [Action::Move { .. }]));
     }
 
     #[test]
