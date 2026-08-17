@@ -171,10 +171,9 @@ fn first_free_invalid_sibling(path: &Path) -> Option<PathBuf> {
 /// whatever was there before the write started.
 ///
 /// The temp filename combines a label, this process's id, and an atomically
-/// incremented counter. `icon::convert::write_atomically` uses only the
-/// process id, which collides across parallel test threads or two calls
-/// within the same process; that gap is a known, already-logged shortcoming
-/// there and is deliberately not repeated here.
+/// incremented counter, so two concurrent calls within one process cannot
+/// pick the same path. `icon::convert::write_atomically` is built the same
+/// way, for the same reason.
 fn write_atomically(dest: &Path, text: &str) -> Result<(), ConfigError> {
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);

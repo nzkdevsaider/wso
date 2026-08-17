@@ -37,6 +37,17 @@ pub struct ExeCandidate {
 impl ExeCandidate {
     /// Number of path components, counting the filename. A file directly in
     /// the install directory has depth 1.
+    ///
+    /// Windows-specific, and load-bearing: this counts components the way
+    /// `Path::components` splits them, which treats `\` as a separator only
+    /// on Windows. In production the paths come from `walk` below, which
+    /// builds them from real directory entries, so the platform's own
+    /// separator is always what is there. In tests the paths are literals
+    /// like `r"bin\tool.exe"` — on any other platform those are a single
+    /// component, every candidate reports depth 1, and the depth rule
+    /// silently stops being exercised at all. That is why the tests holding
+    /// such literals are `#[cfg(windows)]`-gated rather than left to pass
+    /// vacuously.
     pub fn depth(&self) -> usize {
         self.rel_path.components().count()
     }
@@ -156,7 +167,14 @@ fn walk(root: &Path, dir: &Path, remaining: usize, out: &mut Vec<ExeCandidate>) 
     }
 }
 
-#[cfg(test)]
+// `#[cfg(windows)]` as well as `#[cfg(test)]`: every candidate path below
+// is a literal like `r"bin\tool.exe"`, and `\` is a path separator only
+// on Windows. Anywhere else `ExeCandidate::depth` counts all of them as a
+// single component, every candidate reports depth 1, and the depth rule
+// stops being exercised — the regression corpus in particular would keep
+// passing while proving nothing about the rule it was captured for.
+// Refusing to compile off Windows is honest; passing vacuously is not.
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 

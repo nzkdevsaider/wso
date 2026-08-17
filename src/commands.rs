@@ -727,17 +727,32 @@ mod tests {
 
     /// `warn_unresolved` is what turns `resolve_bases`'s output into the
     /// failed-item count `sync`, `clean` and `status` all fold into their
-    /// exit code — this is the piece that makes finding 2/3's fix ("name it
-    /// and exit 1") actually reach the exit code rather than only the
-    /// printed warning.
+    /// exit code - the piece that makes an unresolvable target actually reach
+    /// the exit code rather than only the printed warning.
+    ///
+    /// The previous version of this test passed a one-element slice and
+    /// asserted the answer was 1, which `[_].len()` satisfies on its own: a
+    /// body that ignored its argument entirely and returned a constant would
+    /// have passed. Counting is only observable across more than one entry,
+    /// and only if a repeated target is counted twice rather than collapsed -
+    /// two targets that both failed are two failed items, not one.
     #[test]
-    fn warn_unresolved_counts_each_unresolved_target_exactly_once() {
-        let unresolved = vec![(
-            Target::StartMenu,
-            "could not locate a Windows known folder: boom".to_string(),
-        )];
-        assert_eq!(warn_unresolved(&unresolved, "scanned"), 1);
+    fn warn_unresolved_counts_every_unresolved_target_including_repeats() {
         assert_eq!(warn_unresolved(&[], "scanned"), 0);
+
+        let one = [(Target::StartMenu, "boom".to_string())];
+        assert_eq!(warn_unresolved(&one, "scanned"), 1);
+
+        let three = [
+            (Target::Desktop, "no desktop".to_string()),
+            (Target::StartMenu, "no start menu".to_string()),
+            (Target::StartMenu, "and again".to_string()),
+        ];
+        assert_eq!(
+            warn_unresolved(&three, "scanned"),
+            3,
+            "each entry is one failed item; a repeated target must not collapse"
+        );
     }
 
     // --- summary_line (correction 3 / dry-run wording) ---

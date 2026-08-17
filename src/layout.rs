@@ -602,18 +602,34 @@ mod tests {
             vec![base.join("Games")]
         );
 
-        // Derived from `all_platforms()` — the same source `managed_dirs`
-        // itself consults — rather than a hardcoded two-item list, so this
-        // test keeps proving "every platform" instead of just "these two
-        // platforms" if a third one is ever added.
         let org = Organization::PerPlatform {
             parent: Some("Games".into()),
         };
+
+        // Two assertions, because either one alone is weak in a different
+        // way. The derived expectation keeps proving "every platform" rather
+        // than "these two platforms" if a third is ever added — but it is
+        // built from `all_platforms()`, the very source `managed_dirs`
+        // consults, so a fault in that list is reproduced identically on both
+        // sides and cancels out. The hardcoded list below cannot cancel out:
+        // it is an independent statement of what these directories must
+        // actually be, so a platform silently dropped from `all_platforms()`
+        // fails here even though the derived assertion would still pass.
         let expected: Vec<PathBuf> = all_platforms()
             .into_iter()
             .map(|platform| base.join("Games").join(platform.display_name()))
             .collect();
         assert_eq!(managed_dirs(&base, &org), expected);
+
+        assert_eq!(
+            managed_dirs(&base, &org),
+            vec![
+                base.join("Games").join("Steam"),
+                base.join("Games").join("Epic"),
+            ],
+            "the directories this tool actually writes into today, stated \
+             independently of the list it derives them from"
+        );
     }
 
     #[cfg(windows)]

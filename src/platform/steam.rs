@@ -186,6 +186,13 @@ impl SteamProvider {
 /// a path that hasn't been confirmed to exist — when the directory is
 /// missing or contains no regular files, so callers can fall through to
 /// their own fallback instead of pointing at nothing.
+///
+/// "Largest" alone is not a rule: two assets in one library-cache directory
+/// can be exactly the same size, and then the answer would come down to
+/// whatever order `read_dir` happened to return them in — which is not
+/// guaranteed, so the same game could show one icon today and a different one
+/// tomorrow with nothing having changed. Equal sizes are settled by filename
+/// so the choice is the user's to keep.
 pub(crate) fn pick_library_image(dir: &Path) -> Option<PathBuf> {
     const PREFERRED: [&str; 2] = ["logo.png", "library_600x900.jpg"];
     for name in PREFERRED {
@@ -195,15 +202,24 @@ pub(crate) fn pick_library_image(dir: &Path) -> Option<PathBuf> {
         }
     }
 
-    let entries = std::fs::read_dir(dir).ok()?;
-    entries
+    let mut files: Vec<(PathBuf, u64)> = std::fs::read_dir(dir)
+        .ok()?
         .flatten()
         .filter_map(|entry| {
             let meta = entry.metadata().ok()?;
             meta.is_file().then(|| (entry.path(), meta.len()))
         })
-        .max_by_key(|(_, size)| *size)
-        .map(|(path, _)| path)
+        .collect();
+
+    // Largest first; ties broken by filename, ascending. Two entries in one
+    // directory cannot share a filename, so this is a total order and the
+    // result never depends on directory-entry order.
+    files.sort_by(|(a_path, a_size), (b_path, b_size)| {
+        b_size
+            .cmp(a_size)
+            .then_with(|| a_path.file_name().cmp(&b_path.file_name()))
+    });
+    files.into_iter().next().map(|(path, _)| path)
 }
 
 #[cfg(windows)]
@@ -383,6 +399,42 @@ mod tests {
         std::fs::write(dir.join("f6e5d4c3b2a1"), vec![0u8; 500]).unwrap();
 
         assert_eq!(pick_library_image(&dir), Some(dir.join("f6e5d4c3b2a1")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Two assets of exactly the same size is not exotic — Steam's cache is
+    /// full of small, similarly-shaped files — and "largest remaining" alone
+    /// does not decide between them. Without a tie-break the winner is
+    /// whatever `read_dir` returned last, which no filesystem guarantees, so
+    /// the same game could show one icon today and another tomorrow with
+    /// nothing having changed.
+    ///
+    /// The alphabetically-first name is written to disk *second*, so a
+    /// last-one-wins accident cannot produce the asserted answer. A third
+    /// file that is genuinely larger is absent on purpose: this test must
+    /// isolate the tie-break, not the size comparison.
+    #[test]
+    fn library_image_breaks_a_size_tie_by_filename_rather_than_directory_order() {
+        let dir = scratch_dir("size_tie_broken_by_name");
+        std::fs::write(dir.join("zzz_written_first"), vec![0u8; 500]).unwrap();
+        std::fs::write(dir.join("aaa_written_second"), vec![0u8; 500]).unwrap();
+
+        assert_eq!(
+            pick_library_image(&dir),
+            Some(dir.join("aaa_written_second"))
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The guard on the tie-break: it must only ever settle *ties*. A larger
+    /// file whose name sorts last must still win outright.
+    #[test]
+    fn library_image_still_prefers_a_larger_file_over_an_earlier_name() {
+        let dir = scratch_dir("size_beats_name");
+        std::fs::write(dir.join("aaa_small"), vec![0u8; 10]).unwrap();
+        std::fs::write(dir.join("zzz_large"), vec![0u8; 500]).unwrap();
+
+        assert_eq!(pick_library_image(&dir), Some(dir.join("zzz_large")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -320,31 +320,71 @@ mod tests {
         assert!(matches!(parse(&deep), Err(VdfError::NestedTooDeep)));
     }
 
+    /// The nesting cap must count how deep the parser currently *is*, not how
+    /// many blocks it has seen — so `self.depth` has to come back down when a
+    /// block closes. Steam's own `libraryfolders.vdf` is a flat list of
+    /// sibling blocks, and a library with more than `MAX_NESTING_DEPTH`
+    /// entries is entirely ordinary; without the decrement every such file
+    /// would be rejected as "nested too deep" and the user's whole Steam
+    /// library would be reported unreadable.
+    ///
+    /// The previous version of this test nested three siblings at depth 2
+    /// against a cap of 64. Deleting `self.depth -= 1` would have left it
+    /// passing comfortably — the fourth sibling would have been the first to
+    /// notice, and there was no fourth. This one puts `MAX_NESTING_DEPTH + 1`
+    /// siblings in a row, which is exactly the point where an accumulating
+    /// counter first trips.
     #[test]
-    fn allows_sibling_blocks_at_depth_limit() {
-        // Test that depth is properly decremented so sibling blocks do not accumulate.
-        // Build a structure with sequential nested blocks that reuse the same depth level.
-        let v = parse(
-            "\"root\"\n{\n\
-             \"block1\" { \"key\" \"val1\" }\n\
-             \"block2\" { \"key\" \"val2\" }\n\
-             \"block3\" { \"key\" \"val3\" }\n\
-             }\n",
-        )
-        .unwrap();
-        let root = v.get("root").unwrap();
-        assert_eq!(root.entries().len(), 3);
+    fn sibling_blocks_do_not_accumulate_depth_even_past_the_nesting_cap() {
+        let count = MAX_NESTING_DEPTH + 1;
+        let mut input = String::from("\"libraryfolders\"\n{\n");
+        for i in 0..count {
+            input.push_str(&format!("\"{i}\" {{ \"path\" \"D:\\\\Library{i}\" }}\n"));
+        }
+        input.push_str("}\n");
+
+        let v = parse(&input).expect("sibling blocks are one deep each, not cumulatively deep");
+        let root = v.get("libraryfolders").unwrap();
+        assert_eq!(root.entries().len(), count);
         assert_eq!(
-            root.get("block1").unwrap().get("key").unwrap().as_str(),
-            Some("val1")
+            root.get(&(count - 1).to_string())
+                .unwrap()
+                .get("path")
+                .unwrap()
+                .as_str(),
+            Some(&*format!("D:\\Library{}", count - 1)),
+            "the last sibling, the one an accumulating depth counter would reject"
         );
-        assert_eq!(
-            root.get("block2").unwrap().get("key").unwrap().as_str(),
-            Some("val2")
-        );
-        assert_eq!(
-            root.get("block3").unwrap().get("key").unwrap().as_str(),
-            Some("val3")
+    }
+
+    /// The guard on the test above: the cap must still be a cap. These blocks
+    /// are genuinely nested inside one another rather than sitting side by
+    /// side, so a parser that simply stopped counting would accept them.
+    #[test]
+    fn genuinely_nested_blocks_are_still_rejected_one_past_the_cap() {
+        let mut deep = String::from("\"root\"\n{\n");
+        for _ in 0..MAX_NESTING_DEPTH {
+            deep.push_str("\"k\"\n{\n");
+        }
+        assert!(matches!(parse(&deep), Err(VdfError::NestedTooDeep)));
+    }
+
+    /// And the other side of that boundary: nesting exactly to the cap must
+    /// be accepted, so the limit is off-by-one-proof rather than merely
+    /// "rejects something eventually".
+    #[test]
+    fn nesting_exactly_to_the_cap_is_accepted() {
+        let mut deep = String::new();
+        for i in 0..MAX_NESTING_DEPTH {
+            deep.push_str(&format!("\"k{i}\"\n{{\n"));
+        }
+        deep.push_str("\"leaf\" \"value\"\n");
+        for _ in 0..MAX_NESTING_DEPTH {
+            deep.push_str("}\n");
+        }
+        assert!(
+            parse(&deep).is_ok(),
+            "nesting to exactly the cap must parse"
         );
     }
 }

@@ -66,13 +66,25 @@ pub fn png_to_ico(src: &Path, dest: &Path) -> Result<(), IconError> {
 /// full, a permission error, an antivirus lock mid-write) would leave a
 /// corrupt or empty file there that gets served as a "valid" cached icon on
 /// every subsequent run, forever, with no retry.
+/// The temporary filename combines the destination's name, this process's id,
+/// and an atomically incremented counter — the same construction
+/// `config::write_atomically` uses. The process id alone is not enough: two
+/// icons converted concurrently on different threads of one process (which is
+/// exactly what `cargo test` does, and what a future parallel `resolve` would
+/// do) would pick the same temp path, and whichever finished second would
+/// rename a file the first was still writing.
 fn write_atomically(
     dest: &Path,
     write: impl FnOnce(&mut dyn std::io::Write) -> std::io::Result<()>,
 ) -> Result<(), IconError> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
     let parent = dest.parent().filter(|p| !p.as_os_str().is_empty());
     let file_name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("icon");
-    let tmp_name = format!(".{file_name}.{}.tmp", std::process::id());
+    let pid = std::process::id();
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_name = format!(".{file_name}.{pid}.{n}.tmp");
     let tmp: PathBuf = match parent {
         Some(p) => p.join(tmp_name),
         None => PathBuf::from(tmp_name),
@@ -133,8 +145,19 @@ mod tests {
         std::fs::write(path, bytes).unwrap();
     }
 
+    /// Windows asks for different icon sizes in different places — the Start
+    /// Menu, the desktop, Alt-Tab — and picks the nearest available one,
+    /// scaling if it has to. An `.ico` carrying only the 256px entry would
+    /// still be a valid file with a non-empty length, so it would satisfy
+    /// "a file exists and is not empty"; it would simply look soft everywhere
+    /// but the desktop. This reads the result back and pins every entry, so
+    /// dropping a size from `SIZES` fails here rather than showing up as a
+    /// blurry taskbar icon on someone's machine.
+    ///
+    /// The source is 300x300, larger than the largest requested size, so
+    /// every entry comes from a genuine downscale.
     #[test]
-    fn converts_a_png_into_a_multi_size_ico() {
+    fn converts_a_png_into_an_ico_carrying_every_size_windows_asks_for() {
         let dir = scratch_dir("png_to_ico");
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("logo.png");
@@ -143,8 +166,30 @@ mod tests {
 
         png_to_ico(&src, &dest).unwrap();
 
-        assert!(dest.is_file());
-        assert!(std::fs::metadata(&dest).unwrap().len() > 0);
+        let file = std::fs::File::open(&dest).unwrap();
+        let icon_dir = ico::IconDir::read(std::io::BufReader::new(file))
+            .expect("the result must be readable as an icon directory");
+
+        let mut written: Vec<(u32, u32)> = icon_dir
+            .entries()
+            .iter()
+            .map(|e| (e.width(), e.height()))
+            .collect();
+        written.sort_unstable();
+
+        let mut expected: Vec<(u32, u32)> = SIZES.iter().map(|s| (*s, *s)).collect();
+        expected.sort_unstable();
+
+        assert_eq!(
+            written, expected,
+            "every size in SIZES must be present, and square"
+        );
+        assert_eq!(
+            written,
+            vec![(16, 16), (32, 32), (48, 48), (256, 256)],
+            "the four sizes Windows actually asks for, pinned independently of SIZES"
+        );
+
         std::fs::remove_dir_all(&dir).ok();
     }
 
