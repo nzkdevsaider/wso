@@ -200,7 +200,11 @@ fn describe(actions: &[Action]) {
     }
 }
 
-fn confirm(prompt: &str, assume_yes: bool) -> bool {
+/// `pub(crate)` rather than private: `migrate` (its own module — see
+/// `crate::migrate` — kept separate specifically so this file does not grow
+/// further) reuses this same confirmation choke point rather than
+/// duplicating it.
+pub(crate) fn confirm(prompt: &str, assume_yes: bool) -> bool {
     if assume_yes {
         return true;
     }
@@ -213,7 +217,7 @@ fn confirm(prompt: &str, assume_yes: bool) -> bool {
 /// `0` when nothing failed, `1` otherwise. This function is the only place
 /// that decides between the two — it deliberately has no path to `2`; see
 /// the module doc comment for where that code comes from instead.
-fn exit_code(failed: usize) -> i32 {
+pub(crate) fn exit_code(failed: usize) -> i32 {
     if failed > 0 {
         1
     } else {
@@ -456,9 +460,14 @@ pub fn status(cli: &Cli) -> i32 {
     exit_code(failed)
 }
 
-pub fn migrate(_cli: &Cli) -> i32 {
-    println!("migrate is implemented in Task 15");
-    0
+/// Converts legacy Steam `.url` shortcuts (Steam's own web-bookmark-style
+/// shortcuts, which show up with a blank generic icon) into real `.lnk`
+/// shortcuts. The actual implementation lives in `crate::migrate` — its own
+/// module, kept separate so the orchestration/presentation code already in
+/// this file does not grow any further — this is only the dispatch point
+/// `main` calls through, matching every other command in this module.
+pub fn migrate(cli: &Cli) -> i32 {
+    crate::migrate::run(cli)
 }
 
 #[cfg(test)]

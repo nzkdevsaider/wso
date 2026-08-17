@@ -3,6 +3,7 @@ pub mod commands;
 pub mod config;
 pub mod icon;
 pub mod layout;
+pub mod migrate;
 pub mod ops;
 pub mod plan;
 pub mod platform;
