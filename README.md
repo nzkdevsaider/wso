@@ -48,6 +48,19 @@ repeatedly against a real library of installed games. If something about
 Epic detection does not work as expected, that is the more likely place to
 look first.
 
+**The interactive wizard and the "answer no" path have never actually been
+run by anyone.** Every automated check in this project drives the tool
+through its non-interactive flags, because the prompt library needs a real
+terminal and a real person to type into it. That leaves two of the first
+things a new user meets untested by anything but reading: the wizard `wso
+sync` opens when you pass it no flags, and what happens when you answer *no*
+to "Apply these changes?". The logic behind both is covered by unit tests —
+including that answering no leaves your saved preferences alone — but the
+prompts themselves, their wording, and their behavior on a real console have
+only ever been reasoned about. If the wizard misbehaves, you are likely the
+first person to see it; `--target`, `--organize` and `--yes` skip it
+entirely and are the paths that have been exercised.
+
 **The icon-cache exception is not the same for every command.** Resolving an
 icon (probing an executable, converting it, writing the result under
 `%LOCALAPPDATA%`) happens as part of building the report of what to do, not

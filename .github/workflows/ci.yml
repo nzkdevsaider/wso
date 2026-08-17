@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    # Windows only, and not merely by preference: the shortcut and icon
+    # handling goes through the Windows Shell COM APIs, and several test
+    # modules are `#[cfg(windows)]` because the paths they assert on are
+    # only paths on Windows. A Linux runner would compile a stubbed-out
+    # crate and skip most of what matters.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo test --all
+      - run: cargo clippy -- -D warnings
+      - run: cargo fmt --check
