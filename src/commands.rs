@@ -13,7 +13,7 @@
 
 use crate::cli::Cli;
 use crate::config::{self, ConfigStatus};
-use crate::layout::{self, LayoutError, Organization, Target};
+use crate::layout::{self, LayoutError, Target};
 use crate::ops;
 use crate::plan::{plan, Action};
 use crate::platform::{epic::EpicProvider, steam::SteamProvider, Game, GameProvider, Platform};
@@ -319,7 +319,7 @@ fn sync_target(
 ) -> ops::Summary {
     let cache = config::cache_dir();
 
-    let owned = ops::scan_owned(&ops::managed_dirs(base, &cfg.organization));
+    let owned = ops::scan_owned(&layout::scan_dirs(base, &cfg.organization));
     let desired = ops::build_desired(games, cfg, base, &cache);
     let actions = plan(&desired, &owned);
 
@@ -360,56 +360,15 @@ pub fn sync(cli: &Cli) -> i32 {
     exit_code(failed)
 }
 
-/// Every organization variant `sync` is able to produce, purely for the
-/// purpose of deciding where `clean` should look. `clean` cannot rely on
-/// the *current* configuration alone: a user who once organized into a
-/// unified "Games" folder and has since switched to per-platform folders
-/// (or renamed the folder) would have shortcuts sitting in the old layout
-/// that a scan of only today's configuration could never find, even though
-/// the command advertises removing every shortcut this tool ever created.
-/// Since `Unified` and `PerPlatform` both key off an arbitrary,
-/// user-chosen folder name, this can only be a best-effort list: the name
-/// currently configured (if any), plus the shared default `"Games"`. A
-/// shortcut sitting under some third, no-longer-configured folder name is
-/// still not found — but that is not a safety gap, only a coverage one:
-/// ownership signatures (`shortcut::signature`) gate every deletion
-/// regardless of which directory a file sits in, so widening this scan can
-/// never make an unrelated, unsigned shortcut eligible for deletion.
-fn candidate_organizations(cfg: &config::Config) -> Vec<Organization> {
-    let mut folder_names = vec!["Games".to_string()];
-    let configured = match &cfg.organization {
-        Organization::Unified { folder } => Some(folder.clone()),
-        Organization::PerPlatform {
-            parent: Some(parent),
-        } => Some(parent.clone()),
-        Organization::PerPlatform { parent: None } | Organization::Flat => None,
-    };
-    if let Some(name) = configured {
-        if !folder_names.contains(&name) {
-            folder_names.push(name);
-        }
-    }
-
-    let mut orgs = vec![
-        Organization::Flat,
-        Organization::PerPlatform { parent: None },
-    ];
-    for name in folder_names {
-        orgs.push(Organization::Unified {
-            folder: name.clone(),
-        });
-        orgs.push(Organization::PerPlatform { parent: Some(name) });
-    }
-    orgs
-}
-
 /// Every directory `clean` scans: both known-folder bases (Desktop and the
 /// per-user Start Menu — `clean` is not limited to whichever targets happen
 /// to be configured right now, since the whole point is to find shortcuts
 /// left behind by a *previous* configuration), crossed with every
-/// organization layout in `candidate_organizations`. Duplicate directories
-/// are still de-duplicated defensively so `scan_owned` never reads the same
-/// directory twice. A base that cannot be resolved is returned separately
+/// directory `layout::scan_dirs` names under each of them. `scan_dirs`
+/// already de-duplicates within one base; the extra check below covers the
+/// cross-base case, so `scan_owned` never reads the same directory twice
+/// however the two known folders are configured. A base that cannot be
+/// resolved is returned separately
 /// rather than silently dropped — `clean` must tell the user it did not
 /// scan everywhere it promised to, not print a clean summary that quietly
 /// covered only part of the disk.
@@ -419,11 +378,9 @@ fn clean_scan_dirs(cfg: &config::Config) -> (Vec<PathBuf>, Vec<UnresolvedTarget>
 
     let mut dirs = Vec::new();
     for (_, base) in &resolved {
-        for org in candidate_organizations(cfg) {
-            for d in layout::managed_dirs(base, &org) {
-                if !dirs.contains(&d) {
-                    dirs.push(d);
-                }
+        for d in layout::scan_dirs(base, &cfg.organization) {
+            if !dirs.contains(&d) {
+                dirs.push(d);
             }
         }
     }
@@ -467,7 +424,7 @@ pub fn status(cli: &Cli) -> i32 {
 
     let cache = config::cache_dir();
     for (target, base) in resolved {
-        let owned = ops::scan_owned(&ops::managed_dirs(&base, &cfg.organization));
+        let owned = ops::scan_owned(&layout::scan_dirs(&base, &cfg.organization));
         let desired = ops::build_desired(&games, &cfg, &base, &cache);
         let actions = plan(&desired, &owned);
         let pending = actions
@@ -515,95 +472,6 @@ mod tests {
                 r"C:\Windows\explorer.exe",
             ))],
         }
-    }
-
-    // --- candidate_organizations (correction 1) ---
-
-    /// `candidate_organizations` must include the layout the user is
-    /// currently configured to use — otherwise a plain `clean` run right
-    /// after a normal `sync` could miss the very shortcuts that sync just
-    /// created, which would be a much more common failure than the
-    /// stale-layout scenario this function primarily exists for.
-    #[test]
-    fn candidate_organizations_always_includes_the_currently_configured_layout() {
-        let cfg = config::Config {
-            organization: Organization::PerPlatform {
-                parent: Some("Juegos".into()),
-            },
-            ..Default::default()
-        };
-
-        let orgs = candidate_organizations(&cfg);
-        assert!(
-            orgs.contains(&Organization::PerPlatform {
-                parent: Some("Juegos".into())
-            }),
-            "expected the configured PerPlatform(\"Juegos\") layout among {orgs:?}"
-        );
-    }
-
-    /// The whole point of correction 1: a user who *used to* organize into
-    /// a unified "Games" folder, and is now configured for something else
-    /// entirely, must still have "Games" scanned so old shortcuts are not
-    /// stranded. This is the scenario a scan of only the current config
-    /// cannot detect.
-    #[test]
-    fn candidate_organizations_includes_the_default_games_folder_even_when_not_configured() {
-        let cfg = config::Config {
-            organization: Organization::PerPlatform {
-                parent: Some("Juegos".into()),
-            },
-            ..Default::default()
-        };
-
-        let orgs = candidate_organizations(&cfg);
-        assert!(
-            orgs.contains(&Organization::Unified {
-                folder: "Games".into()
-            }),
-            "expected the default Unified(\"Games\") layout among {orgs:?}"
-        );
-        assert!(
-            orgs.contains(&Organization::PerPlatform {
-                parent: Some("Games".into())
-            }),
-            "expected the default PerPlatform(\"Games\") layout among {orgs:?}"
-        );
-    }
-
-    /// Flat mode and parent-less per-platform mode do not depend on any
-    /// folder name at all, so they must always be scanned regardless of
-    /// what is currently configured.
-    #[test]
-    fn candidate_organizations_always_includes_flat_and_parentless_per_platform() {
-        let cfg = config::Config::default();
-        let orgs = candidate_organizations(&cfg);
-        assert!(orgs.contains(&Organization::Flat));
-        assert!(orgs.contains(&Organization::PerPlatform { parent: None }));
-    }
-
-    /// When the configured folder name already *is* "Games" (the shared
-    /// default), the list must not contain two identical
-    /// `Unified { folder: "Games" }` entries — proving the de-duplication
-    /// keys on the folder name, not merely on "is this the default".
-    #[test]
-    fn candidate_organizations_does_not_duplicate_when_configured_name_is_the_default() {
-        let cfg = config::Config {
-            organization: Organization::Unified {
-                folder: "Games".into(),
-            },
-            ..Default::default()
-        };
-
-        let orgs = candidate_organizations(&cfg);
-        let games_unified_count = orgs
-            .iter()
-            .filter(|o| matches!(o, Organization::Unified { folder } if folder == "Games"))
-            .count();
-        assert_eq!(
-            games_unified_count, 1,
-            "expected exactly one Unified(\"Games\") entry, found {games_unified_count} in {orgs:?}"
-        );
     }
 
     // --- record_platform / exit codes (finding 1) ---

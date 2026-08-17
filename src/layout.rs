@@ -121,8 +121,78 @@ pub fn all_platforms() -> Vec<Platform> {
     vec![Platform::Steam, Platform::Epic]
 }
 
-/// Every directory the tool may place shortcuts into under `base`. Used to
-/// know where to scan for shortcuts we already own.
+/// Every organization variant `sync` is able to produce, purely for the
+/// purpose of deciding where to *look* for shortcuts this tool already owns.
+///
+/// No command may rely on the currently configured layout alone. A user who
+/// once organized into a unified "Games" folder and has since switched to
+/// per-platform folders (or to flat, or renamed the folder) has shortcuts
+/// sitting in the old layout that a scan of only today's configuration can
+/// never find — so `clean` would leave them behind forever, and `sync` would
+/// create a second shortcut for every game beside the ones it could not see.
+/// That second failure was confirmed on a real machine: nine shortcuts
+/// synced as `unified`, then a re-run as `flat` put nine more loose on the
+/// Desktop while the originals stayed in the folder.
+///
+/// Since `Unified` and `PerPlatform` both key off an arbitrary, user-chosen
+/// folder name, this can only be a best-effort list: the name currently
+/// configured (if any), plus the shared default `"Games"`. A shortcut under
+/// some third, no-longer-configured folder name is still not found — but
+/// that is a coverage gap, not a safety one: ownership signatures
+/// (`shortcut::signature`) gate every claim regardless of which directory a
+/// file sits in, so widening this list can never make an unrelated, unsigned
+/// shortcut eligible to be deleted or overwritten.
+pub fn candidate_organizations(configured: &Organization) -> Vec<Organization> {
+    let mut folder_names = vec!["Games".to_string()];
+    let name = match configured {
+        Organization::Unified { folder } => Some(folder.clone()),
+        Organization::PerPlatform {
+            parent: Some(parent),
+        } => Some(parent.clone()),
+        Organization::PerPlatform { parent: None } | Organization::Flat => None,
+    };
+    if let Some(name) = name {
+        if !folder_names.contains(&name) {
+            folder_names.push(name);
+        }
+    }
+
+    let mut orgs = vec![
+        Organization::Flat,
+        Organization::PerPlatform { parent: None },
+    ];
+    for name in folder_names {
+        orgs.push(Organization::Unified {
+            folder: name.clone(),
+        });
+        orgs.push(Organization::PerPlatform { parent: Some(name) });
+    }
+    orgs
+}
+
+/// Every directory under `base` that may hold a shortcut this tool owns —
+/// every layout in [`candidate_organizations`], not merely the configured
+/// one — de-duplicated so a caller never reads the same directory twice.
+///
+/// This is what `sync`, `status` and `clean` all scan. `sync` and `status`
+/// used to scan `managed_dirs(base, &cfg.organization)` instead, which is
+/// what stranded and duplicated shortcuts across a mode switch; `clean` was
+/// the only command that had ever been given the wider list.
+pub fn scan_dirs(base: &Path, configured: &Organization) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for org in candidate_organizations(configured) {
+        for d in managed_dirs(base, &org) {
+            if !dirs.contains(&d) {
+                dirs.push(d);
+            }
+        }
+    }
+    dirs
+}
+
+/// Every directory the tool may place shortcuts into under `base` for one
+/// specific organization. This is where a shortcut is *written*; use
+/// [`scan_dirs`] to decide where to look for shortcuts already on disk.
 pub fn managed_dirs(base: &Path, org: &Organization) -> Vec<PathBuf> {
     match org {
         Organization::Flat | Organization::Unified { .. } => {
@@ -362,6 +432,160 @@ mod tests {
             assign_filenames(&entries),
             vec!["X4 Foundations (Steam)", "X4 Foundations (Epic)"]
         );
+    }
+
+    // --- candidate_organizations / scan_dirs ---
+
+    /// The list must include the layout the user is currently configured to
+    /// use — otherwise a `clean` run right after a normal `sync` could miss
+    /// the very shortcuts that sync just created, which would be a far more
+    /// common failure than the stale-layout scenario this function primarily
+    /// exists for.
+    #[test]
+    fn candidate_organizations_always_includes_the_currently_configured_layout() {
+        let configured = Organization::PerPlatform {
+            parent: Some("Juegos".into()),
+        };
+        let orgs = candidate_organizations(&configured);
+        assert!(
+            orgs.contains(&configured),
+            "expected the configured PerPlatform(\"Juegos\") layout among {orgs:?}"
+        );
+    }
+
+    /// The whole point: a user who *used to* organize into a unified "Games"
+    /// folder, and is now configured for something else entirely, must still
+    /// have "Games" scanned so old shortcuts are neither stranded nor
+    /// duplicated. This is the scenario a scan of only the current config
+    /// cannot detect.
+    #[test]
+    fn candidate_organizations_includes_the_default_games_folder_even_when_not_configured() {
+        let orgs = candidate_organizations(&Organization::PerPlatform {
+            parent: Some("Juegos".into()),
+        });
+        assert!(
+            orgs.contains(&Organization::Unified {
+                folder: "Games".into()
+            }),
+            "expected the default Unified(\"Games\") layout among {orgs:?}"
+        );
+        assert!(
+            orgs.contains(&Organization::PerPlatform {
+                parent: Some("Games".into())
+            }),
+            "expected the default PerPlatform(\"Games\") layout among {orgs:?}"
+        );
+    }
+
+    /// Flat mode and parent-less per-platform mode do not depend on any
+    /// folder name at all, so they must always be scanned regardless of what
+    /// is currently configured.
+    #[test]
+    fn candidate_organizations_always_includes_flat_and_parentless_per_platform() {
+        let orgs = candidate_organizations(&Organization::Flat);
+        assert!(orgs.contains(&Organization::Flat));
+        assert!(orgs.contains(&Organization::PerPlatform { parent: None }));
+    }
+
+    /// When the configured folder name already *is* "Games" (the shared
+    /// default), the list must not contain two identical
+    /// `Unified { folder: "Games" }` entries — proving the de-duplication
+    /// keys on the folder name, not merely on "is this the default".
+    #[test]
+    fn candidate_organizations_does_not_duplicate_when_configured_name_is_the_default() {
+        let orgs = candidate_organizations(&Organization::Unified {
+            folder: "Games".into(),
+        });
+        let games_unified_count = orgs
+            .iter()
+            .filter(|o| matches!(o, Organization::Unified { folder } if folder == "Games"))
+            .count();
+        assert_eq!(
+            games_unified_count, 1,
+            "expected exactly one Unified(\"Games\") entry, found {games_unified_count} in {orgs:?}"
+        );
+    }
+
+    /// The directory a `flat` run writes into is `base` itself. Configured
+    /// for `unified`, `managed_dirs` names only `base\Games` — so a shortcut
+    /// left loose on the Desktop by an earlier flat run is invisible, and
+    /// `sync` creates a duplicate beside it instead of moving it. `scan_dirs`
+    /// must name `base` too.
+    #[test]
+    fn scan_dirs_includes_the_flat_base_even_when_configured_for_a_folder() {
+        let base = PathBuf::from(r"C:\Desktop");
+        let configured = Organization::Unified {
+            folder: "Games".into(),
+        };
+        assert_eq!(managed_dirs(&base, &configured), vec![base.join("Games")]);
+        assert!(
+            scan_dirs(&base, &configured).contains(&base),
+            "a shortcut from a previous flat run sits directly in the base and must be scanned"
+        );
+    }
+
+    /// The reverse direction, and the per-platform layouts: configured for
+    /// `flat`, the scan must still descend into the folders a `unified` or
+    /// `per-platform` run would have written into — including the
+    /// user-chosen folder name, not just the default.
+    #[test]
+    fn scan_dirs_includes_the_folder_layouts_even_when_configured_flat() {
+        let base = PathBuf::from(r"C:\Desktop");
+        let dirs = scan_dirs(&base, &Organization::Flat);
+        for expected in [
+            base.join("Games"),
+            base.join("Steam"),
+            base.join("Epic"),
+            base.join("Games").join("Steam"),
+            base.join("Games").join("Epic"),
+        ] {
+            assert!(
+                dirs.contains(&expected),
+                "expected {expected:?} among {dirs:?}"
+            );
+        }
+    }
+
+    /// A user-chosen folder name must be scanned as well as the default —
+    /// this is the only entry that depends on the *configured* layout rather
+    /// than the fixed candidate list.
+    #[test]
+    fn scan_dirs_includes_a_user_chosen_folder_name() {
+        let base = PathBuf::from(r"C:\Desktop");
+        let dirs = scan_dirs(
+            &base,
+            &Organization::Unified {
+                folder: "Juegos".into(),
+            },
+        );
+        assert!(dirs.contains(&base.join("Juegos")), "{dirs:?}");
+        assert!(dirs.contains(&base.join("Games")), "{dirs:?}");
+    }
+
+    /// Several candidate layouts name the same directory — `Flat` and
+    /// `Unified` both reduce to `base` when the folder name is empty of
+    /// effect, and the configured name may equal the default. Reading the
+    /// same directory twice would let one shortcut be claimed twice and
+    /// reconciled against itself, so the list must be free of duplicates.
+    #[test]
+    fn scan_dirs_never_names_the_same_directory_twice() {
+        let base = PathBuf::from(r"C:\Desktop");
+        for configured in [
+            Organization::Flat,
+            Organization::Unified {
+                folder: "Games".into(),
+            },
+            Organization::PerPlatform { parent: None },
+            Organization::PerPlatform {
+                parent: Some("Games".into()),
+            },
+        ] {
+            let dirs = scan_dirs(&base, &configured);
+            let mut unique = dirs.clone();
+            unique.sort();
+            unique.dedup();
+            assert_eq!(unique.len(), dirs.len(), "duplicates in {dirs:?}");
+        }
     }
 
     #[test]

@@ -21,7 +21,7 @@
 
 use crate::config::Config;
 use crate::icon;
-use crate::layout::{self, Organization};
+use crate::layout;
 use crate::plan::{Action, DesiredShortcut, OwnedShortcut};
 use crate::platform::Game;
 use crate::shortcut::collision::{self, Collision};
@@ -334,12 +334,6 @@ pub fn summarize(outcomes: &[Outcome]) -> Summary {
         }
     }
     s
-}
-
-/// Directories the tool may own for a given base and organization. Thin
-/// re-export so callers do not need to reach into `layout` directly.
-pub fn managed_dirs(base: &Path, org: &Organization) -> Vec<PathBuf> {
-    layout::managed_dirs(base, org)
 }
 
 #[cfg(test)]
