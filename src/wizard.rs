@@ -4,14 +4,29 @@
 //! cannot be driven from a test) and does nothing else until it hands them,
 //! all at once, to `apply_answers`. That function is the only place that
 //! decides how answers become configuration, and it never touches I/O.
+//!
+//! Every prompt in `run` is backed by a table (`ORGANIZATION_OPTIONS`,
+//! `TARGET_OPTIONS`, `platform_table`) that is the single source of truth
+//! for both the option labels shown to the user and the meaning assigned to
+//! whichever one they pick. Earlier revisions of this file matched on label
+//! strings in two separate places — the prompt's option list and a `match`
+//! interpreting the answer — which meant editing one without the other (a
+//! typo, a reworded label, an em dash quietly becoming a hyphen) silently
+//! changed what the user saw without changing what the code understood, with
+//! nothing failing to compile and no test failing. Reading both the options
+//! and their meaning from one table closes that gap, and a lookup miss is
+//! treated as a cancellation rather than a guessed default.
 
 use crate::config::Config;
 use crate::layout::{Organization, Target};
 use crate::platform::Platform;
 
 /// Returned when the user backs out of the wizard (Escape or Ctrl-C on any
-/// prompt) or deliberately chooses no platforms. `run` never calls
-/// `apply_answers` in either case, so `cfg` is left exactly as it was.
+/// prompt), deliberately chooses no platforms, or — defensively — when a
+/// prompt's answer fails to resolve against its table (see the module doc).
+/// `run` never calls `apply_answers` in any of these cases, so `cfg` is left
+/// exactly as it was.
+#[derive(Debug, PartialEq, Eq)]
 pub struct Cancelled;
 
 /// Which organization mode the user picked, before it has been turned into
@@ -62,65 +77,130 @@ pub fn apply_answers(cfg: &mut Config, a: Answers) {
     };
 }
 
+/// Label ↔ meaning pairs for the "how should shortcuts be grouped" prompt —
+/// the single source of truth used both to render the prompt's option list
+/// (`organization_labels`) and to interpret the answer (`resolve_organization`).
+const ORGANIZATION_OPTIONS: [(&str, OrgChoice); 3] = [
+    ("One folder for all games", OrgChoice::Unified),
+    ("One folder per platform", OrgChoice::PerPlatform),
+    ("No folder — place them directly in the target", OrgChoice::Flat),
+];
+
+fn organization_labels() -> Vec<&'static str> {
+    ORGANIZATION_OPTIONS.iter().map(|(label, _)| *label).collect()
+}
+
+/// Looks `choice` up in `ORGANIZATION_OPTIONS` rather than trusting it blindly.
+/// A `Select` prompt built from `organization_labels()` can only ever return
+/// one of that table's own labels, so this lookup cannot fail in practice —
+/// but if the table and the prompt ever drift apart, a miss becomes a
+/// cancellation, not a silently guessed `OrgChoice::Unified`.
+fn resolve_organization(choice: &str) -> Result<OrgChoice, Cancelled> {
+    ORGANIZATION_OPTIONS
+        .iter()
+        .find(|(label, _)| *label == choice)
+        .map(|(_, org)| *org)
+        .ok_or(Cancelled)
+}
+
+/// Label ↔ targets pairs for the "where should shortcuts go" prompt — the
+/// single source of truth used both to render the prompt's option list
+/// (`target_labels`) and to interpret the answer (`resolve_targets`).
+const TARGET_OPTIONS: [(&str, &[Target]); 3] = [
+    ("Start Menu", &[Target::StartMenu]),
+    ("Desktop", &[Target::Desktop]),
+    ("Both", &[Target::Desktop, Target::StartMenu]),
+];
+
+fn target_labels() -> Vec<&'static str> {
+    TARGET_OPTIONS.iter().map(|(label, _)| *label).collect()
+}
+
+/// Looks `choice` up in `TARGET_OPTIONS` rather than trusting it blindly, for
+/// the same reason as `resolve_organization`: a miss becomes a cancellation,
+/// never a guessed default target list.
+fn resolve_targets(choice: &str) -> Result<Vec<Target>, Cancelled> {
+    TARGET_OPTIONS
+        .iter()
+        .find(|(label, _)| *label == choice)
+        .map(|(_, targets)| targets.to_vec())
+        .ok_or(Cancelled)
+}
+
+/// Label ↔ `Platform` pairs for the platform prompt, built from
+/// `layout::all_platforms()` rather than a second hardcoded list of
+/// variants. `all_platforms` is an exhaustive match over `Platform`, so a
+/// platform added there without updating this table is a compile error —
+/// the same guard the crate already relies on for `layout::managed_dirs`,
+/// shared here instead of re-implemented (and left unguarded) a second time.
+fn platform_table() -> Vec<(&'static str, Platform)> {
+    crate::layout::all_platforms().into_iter().map(|p| (p.display_name(), p)).collect()
+}
+
+fn platform_labels() -> Vec<&'static str> {
+    platform_table().iter().map(|(label, _)| *label).collect()
+}
+
+/// Pure: turns the labels the user checked in the platform `MultiSelect`
+/// back into `Platform`s. The result follows `platform_table`'s own order,
+/// not `chosen`'s, so checking boxes in any order yields the same
+/// `Vec<Platform>` as long as the same boxes are checked.
+fn resolve_platforms(chosen: &[&str]) -> Vec<Platform> {
+    platform_table()
+        .into_iter()
+        .filter(|(label, _)| chosen.contains(label))
+        .map(|(_, platform)| platform)
+        .collect()
+}
+
+/// True when the platform `MultiSelect` came back with nothing checked. This
+/// is a real, deliberate input — not an error — so `run` gives it its own
+/// branch instead of letting an empty `Vec<Platform>` fall through to
+/// `apply_answers` unremarked; see `run` for what happens when it's true.
+fn no_platforms_chosen(chosen: &[&str]) -> bool {
+    chosen.is_empty()
+}
+
 /// Runs the interactive wizard: platforms, then targets, then organization,
-/// then (when it means something) a folder name. Nothing in `cfg` changes
-/// until every prompt has succeeded — the answers are accumulated in local
+/// then (when it means something) a folder name. Every decision — which
+/// platforms were checked, which targets a label means, which `OrgChoice` a
+/// label means — is delegated to a pure function above; this function only
+/// prompts and sequences. Nothing in `cfg` changes until every prompt (and
+/// every lookup) has succeeded: the answers are accumulated in local
 /// variables and only handed to `apply_answers` once, at the very end, so a
-/// cancellation on any prompt (`?` below) returns before `cfg` is touched at
-/// all, leaving it exactly as the caller passed it in.
+/// cancellation on any prompt or lookup (the `?` operators below) returns
+/// before `cfg` is touched at all, leaving it exactly as the caller passed
+/// it in.
 pub fn run(cfg: &mut Config) -> Result<(), Cancelled> {
     use inquire::{Confirm, MultiSelect, Select, Text};
 
     println!("WinShortcutsOrganizer setup\n");
 
-    let platform_options = vec![Platform::Steam, Platform::Epic];
-    let labels: Vec<&str> = platform_options.iter().map(|p| p.display_name()).collect();
+    let labels = platform_labels();
     let defaults: Vec<usize> = (0..labels.len()).collect();
     let chosen = MultiSelect::new("Which platforms should be scanned?", labels)
         .with_default(&defaults)
         .prompt()
         .map_err(|_| Cancelled)?;
 
-    if chosen.is_empty() {
+    if no_platforms_chosen(&chosen) {
         println!(
             "\nNo platforms selected — there would be nothing to sync, so setup is cancelled.\n\
              Run the wizard again to choose at least one platform."
         );
         return Err(Cancelled);
     }
-    let platforms: Vec<Platform> = platform_options
-        .iter()
-        .copied()
-        .filter(|p| chosen.contains(&p.display_name()))
-        .collect();
+    let platforms = resolve_platforms(&chosen);
 
-    let target_choice = Select::new(
-        "Where should shortcuts be placed?",
-        vec!["Start Menu", "Desktop", "Both"],
-    )
-    .prompt()
-    .map_err(|_| Cancelled)?;
-    let targets = match target_choice {
-        "Desktop" => vec![Target::Desktop],
-        "Both" => vec![Target::Desktop, Target::StartMenu],
-        _ => vec![Target::StartMenu],
-    };
+    let target_choice = Select::new("Where should shortcuts be placed?", target_labels())
+        .prompt()
+        .map_err(|_| Cancelled)?;
+    let targets = resolve_targets(target_choice)?;
 
-    let org_choice = Select::new(
-        "How should shortcuts be grouped?",
-        vec![
-            "One folder for all games",
-            "One folder per platform",
-            "No folder — place them directly in the target",
-        ],
-    )
-    .prompt()
-    .map_err(|_| Cancelled)?;
-    let organization = match org_choice {
-        "One folder per platform" => OrgChoice::PerPlatform,
-        "No folder — place them directly in the target" => OrgChoice::Flat,
-        _ => OrgChoice::Unified,
-    };
+    let org_choice = Select::new("How should shortcuts be grouped?", organization_labels())
+        .prompt()
+        .map_err(|_| Cancelled)?;
+    let organization = resolve_organization(org_choice)?;
 
     let folder = match organization {
         OrgChoice::Flat => None,
@@ -222,8 +302,32 @@ mod tests {
         );
     }
 
+    /// The `PerPlatform` parent is genuinely optional (see `apply_answers`):
+    /// unlike `Unified`, a missing folder answer here must stay `None`
+    /// rather than being defaulted to anything. Only the `Some` case was
+    /// covered before this test — the "don't nest" outcome, which is the
+    /// simpler of the two, was not.
     #[test]
-    fn preserves_exclusions_and_overrides() {
+    fn per_platform_mode_allows_no_parent_folder() {
+        let mut cfg = Config::default();
+        apply_answers(
+            &mut cfg,
+            Answers {
+                platforms: vec![Platform::Steam],
+                targets: vec![Target::StartMenu],
+                organization: OrgChoice::PerPlatform,
+                folder: None,
+            },
+        );
+        assert_eq!(cfg.organization, Organization::PerPlatform { parent: None });
+    }
+
+    /// The wizard never asks about exclusions, so a hand-set exclusion list
+    /// must still be there afterwards. `apply_answers` simply never assigns
+    /// `cfg.exclusions`; this test is what would catch a future edit that
+    /// started doing so.
+    #[test]
+    fn preserves_exclusions() {
         let mut cfg = Config::default();
         cfg.exclusions = vec!["steam:1".into()];
         apply_answers(
@@ -238,10 +342,10 @@ mod tests {
         assert_eq!(cfg.exclusions, vec!["steam:1".to_string()]);
     }
 
-    /// The wizard never asks about icon overrides, so — like exclusions
-    /// above — a hand-set override must still be there afterwards.
-    /// `apply_answers` simply never assigns `cfg.icon_overrides`; this test
-    /// is what would catch a future edit that started doing so.
+    /// The wizard never asks about icon overrides either, so — like
+    /// exclusions above — a hand-set override must still be there
+    /// afterwards. `apply_answers` simply never assigns `cfg.icon_overrides`;
+    /// this test is what would catch a future edit that started doing so.
     #[test]
     fn preserves_icon_overrides() {
         use std::path::PathBuf;
@@ -261,5 +365,60 @@ mod tests {
             cfg.icon_overrides.get("steam:440"),
             Some(&PathBuf::from(r"C:\icons\tf2.ico"))
         );
+    }
+
+    /// Each label in `ORGANIZATION_OPTIONS` must map back to the `OrgChoice`
+    /// paired with it in that same table — proving `resolve_organization`
+    /// actually reads the table rather than containing its own separate,
+    /// possibly-drifted `match`.
+    #[test]
+    fn resolve_organization_maps_each_table_label_to_its_own_choice() {
+        for (label, expected) in ORGANIZATION_OPTIONS {
+            assert_eq!(resolve_organization(label), Ok(expected));
+        }
+    }
+
+    /// A label that isn't in the table (the only way this can happen in
+    /// practice is the table and the `Select` prompt drifting apart — see
+    /// the module doc) must cancel rather than silently resolve to some
+    /// default `OrgChoice`.
+    #[test]
+    fn resolve_organization_rejects_a_label_absent_from_the_table() {
+        assert_eq!(resolve_organization("Some option nobody offered"), Err(Cancelled));
+    }
+
+    /// Same guarantee as `resolve_organization_maps_each_table_label_to_its_own_choice`,
+    /// for the target prompt's table.
+    #[test]
+    fn resolve_targets_maps_each_table_label_to_its_own_targets() {
+        for (label, expected) in TARGET_OPTIONS {
+            assert_eq!(resolve_targets(label), Ok(expected.to_vec()));
+        }
+    }
+
+    #[test]
+    fn resolve_targets_rejects_a_label_absent_from_the_table() {
+        assert_eq!(resolve_targets("Neither, thanks"), Err(Cancelled));
+    }
+
+    /// `resolve_platforms` must return exactly the platforms whose labels
+    /// were checked — not more, not fewer — and in `platform_table`'s own
+    /// order rather than the order they happen to appear in `chosen`, which
+    /// is proved here by listing them checked in reverse.
+    #[test]
+    fn resolve_platforms_returns_checked_platforms_in_table_order_regardless_of_input_order() {
+        assert_eq!(resolve_platforms(&["Epic", "Steam"]), vec![Platform::Steam, Platform::Epic]);
+        assert_eq!(resolve_platforms(&["Epic"]), vec![Platform::Epic]);
+    }
+
+    #[test]
+    fn resolve_platforms_returns_empty_for_an_empty_selection() {
+        assert_eq!(resolve_platforms(&[]), Vec::<Platform>::new());
+    }
+
+    #[test]
+    fn no_platforms_chosen_is_true_only_for_an_empty_selection() {
+        assert!(no_platforms_chosen(&[]));
+        assert!(!no_platforms_chosen(&["Steam"]));
     }
 }

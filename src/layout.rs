@@ -105,7 +105,11 @@ pub fn shortcut_dir(base: &Path, org: &Organization, platform: Platform) -> Path
 /// this list, and a platform silently missing from it would mean its
 /// shortcuts are created but never found again for cleanup or mode
 /// switches.
-fn all_platforms() -> Vec<Platform> {
+///
+/// Public so other guarded call sites (the wizard's platform prompt, in
+/// particular) can share this list instead of re-listing `Platform`
+/// variants themselves with no such guard.
+pub fn all_platforms() -> Vec<Platform> {
     match Platform::Steam {
         Platform::Steam | Platform::Epic => {}
     }
