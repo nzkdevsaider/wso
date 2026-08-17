@@ -95,6 +95,23 @@ pub fn shortcut_dir(base: &Path, org: &Organization, platform: Platform) -> Path
     }
 }
 
+/// Every platform this tool currently supports.
+///
+/// Built through an exhaustive `match` rather than a bare list literal: the
+/// arm below is required to cover every variant of `Platform`, so adding a
+/// new variant to that enum makes this stop compiling until the new
+/// platform is added here too. That is deliberate — `managed_dirs` (and,
+/// downstream, Task 12's scan of what the tool owns) is built on top of
+/// this list, and a platform silently missing from it would mean its
+/// shortcuts are created but never found again for cleanup or mode
+/// switches.
+fn all_platforms() -> Vec<Platform> {
+    match Platform::Steam {
+        Platform::Steam | Platform::Epic => {}
+    }
+    vec![Platform::Steam, Platform::Epic]
+}
+
 /// Every directory the tool may place shortcuts into under `base`. Used to
 /// know where to scan for shortcuts we already own.
 pub fn managed_dirs(base: &Path, org: &Organization) -> Vec<PathBuf> {
@@ -102,10 +119,10 @@ pub fn managed_dirs(base: &Path, org: &Organization) -> Vec<PathBuf> {
         Organization::Flat | Organization::Unified { .. } => {
             vec![shortcut_dir(base, org, Platform::Steam)]
         }
-        Organization::PerPlatform { .. } => vec![
-            shortcut_dir(base, org, Platform::Steam),
-            shortcut_dir(base, org, Platform::Epic),
-        ],
+        Organization::PerPlatform { .. } => all_platforms()
+            .into_iter()
+            .map(|platform| shortcut_dir(base, org, platform))
+            .collect(),
     }
 }
 
@@ -163,11 +180,19 @@ pub fn target_dir(target: Target) -> Result<PathBuf, LayoutError> {
     unsafe {
         let pwstr = SHGetKnownFolderPath(&id, KF_FLAG_DEFAULT, None)
             .map_err(|e| LayoutError::UnknownFolder(e.to_string()))?;
-        let s = pwstr
+        // Convert before freeing, but free unconditionally: `to_string`
+        // copies the buffer into an owned `String`, so it is always safe to
+        // free the shell-owned buffer once it returns, regardless of
+        // whether the conversion succeeded. Doing the free before the `?`
+        // below (rather than after, as a previous version of this function
+        // did) matters because invalid UTF-16 in the returned path is a
+        // real, if rare, way for `to_string` to fail — and that failure
+        // must not leak the buffer `SHGetKnownFolderPath` allocated.
+        let result = pwstr
             .to_string()
-            .map_err(|e| LayoutError::UnknownFolder(e.to_string()))?;
+            .map_err(|e| LayoutError::UnknownFolder(e.to_string()));
         windows::Win32::System::Com::CoTaskMemFree(Some(pwstr.0 as *const _));
-        Ok(PathBuf::from(s))
+        Ok(PathBuf::from(result?))
     }
 }
 
@@ -264,6 +289,16 @@ mod tests {
     }
 
     #[test]
+    fn per_platform_parent_folder_name_is_sanitized_too() {
+        let base = PathBuf::from(r"C:\Desktop");
+        let org = Organization::PerPlatform { parent: Some("My: Games".into()) };
+        assert_eq!(
+            shortcut_dir(&base, &org, Platform::Steam),
+            base.join("My Games").join("Steam")
+        );
+    }
+
+    #[test]
     fn distinct_names_are_left_alone() {
         let entries = [
             (Platform::Steam, "Terraria".to_string()),
@@ -317,10 +352,17 @@ mod tests {
             managed_dirs(&base, &Organization::Unified { folder: "Games".into() }),
             vec![base.join("Games")]
         );
-        assert_eq!(
-            managed_dirs(&base, &Organization::PerPlatform { parent: Some("Games".into()) }),
-            vec![base.join("Games").join("Steam"), base.join("Games").join("Epic")]
-        );
+
+        // Derived from `all_platforms()` — the same source `managed_dirs`
+        // itself consults — rather than a hardcoded two-item list, so this
+        // test keeps proving "every platform" instead of just "these two
+        // platforms" if a third one is ever added.
+        let org = Organization::PerPlatform { parent: Some("Games".into()) };
+        let expected: Vec<PathBuf> = all_platforms()
+            .into_iter()
+            .map(|platform| base.join("Games").join(platform.display_name()))
+            .collect();
+        assert_eq!(managed_dirs(&base, &org), expected);
     }
 
     #[cfg(windows)]
