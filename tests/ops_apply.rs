@@ -8,7 +8,7 @@ use winshortcuts_organizer::plan::{Action, DesiredShortcut};
 use winshortcuts_organizer::platform::Platform;
 use winshortcuts_organizer::shortcut::{
     signature::{encode, Signature},
-    writer::{write_lnk, ComGuard},
+    writer::{read_lnk, write_lnk, ComGuard},
     LnkData,
 };
 
@@ -295,6 +295,206 @@ fn move_reports_failure_when_the_old_path_cannot_be_removed_but_keeps_the_new_fi
         summary.failed, 1,
         "an incomplete move must be reported as a failure"
     );
+    assert_eq!(summary.moved, 0);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// C1, the `Create` half. `README.md` promises that `sync` "never modifies
+/// or removes a file it did not create"; before this test existed, a plain
+/// `Create` called `write_lnk` unconditionally and a hand-made
+/// `Terraria.lnk` at the destination was silently replaced — target,
+/// description and all — while the run reported a successful create and
+/// zero failures. There is no Recycle Bin on that path: the user's file is
+/// simply gone.
+///
+/// The planted shortcut carries no `[wso:...]` marker, so only an ownership
+/// check at the write site can produce both halves of this assertion: the
+/// bytes unchanged *and* a reported failure. A gate that merely refused to
+/// write whenever anything exists at the destination would also pass this
+/// one, which is why
+/// `create_overwrites_a_shortcut_this_tool_already_owns_for_the_same_game`
+/// sits beside it.
+#[test]
+fn create_refuses_to_overwrite_a_foreign_shortcut_and_reports_it_as_a_failure() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("create_collision_foreign");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let planted = dir.join("Terraria.lnk");
+    write_lnk(
+        &planted,
+        &LnkData {
+            target: system_exe(),
+            args: String::new(),
+            working_dir: None,
+            icon: None,
+            description: "MIO - no tocar".into(),
+        },
+    )
+    .unwrap();
+    let original_bytes = std::fs::read(&planted).unwrap();
+
+    let actions = vec![Action::Create(DesiredShortcut {
+        sig: Signature {
+            platform: Platform::Steam,
+            id: "105600".into(),
+        },
+        path: planted.clone(),
+        lnk: LnkData {
+            target: dir.join("steam.exe"),
+            args: "-applaunch 105600".into(),
+            working_dir: None,
+            icon: None,
+            description: encode(
+                "Terraria",
+                &Signature {
+                    platform: Platform::Steam,
+                    id: "105600".into(),
+                },
+            ),
+        },
+    })];
+
+    let outcomes = apply(&actions, false);
+
+    assert!(
+        std::fs::read(&planted).unwrap() == original_bytes,
+        "a shortcut this tool did not create must be left byte-for-byte untouched"
+    );
+    let summary = summarize(&outcomes);
+    assert_eq!(
+        summary.failed, 1,
+        "a blocked collision must be reported as a failed item, not a silent success"
+    );
+    assert_eq!(summary.created, 0);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The other side of C1's gate: it is a *collision* check, not a blanket
+/// refusal to write where a file already exists. A leftover carrying our own
+/// signature for this same game is functionally the shortcut this run would
+/// write anyway, so overwriting it must still succeed — and must actually
+/// rewrite the file, which the target assertion proves.
+#[test]
+fn create_overwrites_a_shortcut_this_tool_already_owns_for_the_same_game() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("create_collision_owned");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let sig = Signature {
+        platform: Platform::Steam,
+        id: "105600".into(),
+    };
+    let path = dir.join("Terraria.lnk");
+    write_lnk(
+        &path,
+        &LnkData {
+            target: system_exe(),
+            args: String::new(),
+            working_dir: None,
+            icon: None,
+            description: encode("Terraria", &sig),
+        },
+    )
+    .unwrap();
+
+    let new_target = dir.join("steam.exe");
+    std::fs::write(&new_target, b"stand-in for steam.exe").unwrap();
+    let actions = vec![Action::Create(DesiredShortcut {
+        sig: sig.clone(),
+        path: path.clone(),
+        lnk: LnkData {
+            target: new_target.clone(),
+            args: "-applaunch 105600".into(),
+            working_dir: None,
+            icon: None,
+            description: encode("Terraria", &sig),
+        },
+    })];
+
+    let outcomes = apply(&actions, false);
+
+    let summary = summarize(&outcomes);
+    assert_eq!(summary.failed, 0, "our own shortcut is safe to refresh");
+    assert_eq!(summary.created, 1);
+    assert_eq!(
+        read_lnk(&path).unwrap().target,
+        new_target,
+        "the file must actually have been rewritten, not merely left alone"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// C1, the `Move` half. A mode switch relocates a shortcut by writing it at
+/// the new path, and that write went through the same unguarded `write_lnk`
+/// as `Create`. Here a hand-made file already sits at the destination: it
+/// must survive, the shortcut being moved must stay where it is (a move that
+/// could not land must not also destroy its own source), and the run must
+/// report the failure.
+#[test]
+fn move_refuses_to_overwrite_a_foreign_shortcut_at_the_destination() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("move_collision_foreign");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let sig = Signature {
+        platform: Platform::Steam,
+        id: "105600".into(),
+    };
+    let from = dir.join("Terraria.lnk");
+    write_lnk(
+        &from,
+        &LnkData {
+            target: system_exe(),
+            args: "-applaunch 105600".into(),
+            working_dir: None,
+            icon: None,
+            description: encode("Terraria", &sig),
+        },
+    )
+    .unwrap();
+
+    let to = dir.join("Games").join("Terraria.lnk");
+    write_lnk(
+        &to,
+        &LnkData {
+            target: system_exe(),
+            args: String::new(),
+            working_dir: None,
+            icon: None,
+            description: "MIO - no tocar".into(),
+        },
+    )
+    .unwrap();
+    let original_bytes = std::fs::read(&to).unwrap();
+
+    let actions = vec![Action::Move {
+        from: from.clone(),
+        to: to.clone(),
+        lnk: LnkData {
+            target: dir.join("steam.exe"),
+            args: "-applaunch 105600".into(),
+            working_dir: None,
+            icon: None,
+            description: encode("Terraria", &sig),
+        },
+    }];
+
+    let outcomes = apply(&actions, false);
+
+    assert!(
+        std::fs::read(&to).unwrap() == original_bytes,
+        "the foreign shortcut at the destination must be left byte-for-byte untouched"
+    );
+    assert!(
+        from.is_file(),
+        "a move that could not land must not remove the shortcut it was moving"
+    );
+    let summary = summarize(&outcomes);
+    assert_eq!(summary.failed, 1);
     assert_eq!(summary.moved, 0);
 
     std::fs::remove_dir_all(&dir).ok();

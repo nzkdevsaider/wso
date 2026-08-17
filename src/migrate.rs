@@ -49,67 +49,12 @@ use crate::icon;
 use crate::layout::{self, Target};
 use crate::platform::steam::SteamProvider;
 use crate::platform::{Game, GameProvider, Platform};
-use crate::shortcut::signature::{decode, encode, Signature};
+use crate::shortcut::collision::{check_existing, Collision};
+use crate::shortcut::signature::{encode, Signature};
 use crate::shortcut::url_legacy::{self, LegacyUrl};
-use crate::shortcut::writer::{read_lnk, write_lnk};
+use crate::shortcut::writer::write_lnk;
 use crate::shortcut::LnkData;
 use std::path::{Path, PathBuf};
-
-/// What `write_lnk`'s destination path (a `.lnk` derived from a legacy
-/// `.url`'s file stem) already holds, and what that means for whether it is
-/// safe to overwrite. Named Risk 5: converting `Terraria.url` produces
-/// `Terraria.lnk`, and if a previous `sync` (or an earlier `migrate` run)
-/// already left something there, overwriting it must be a deliberate
-/// decision, never a silent one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Collision {
-    /// Nothing sits at the destination path yet.
-    Clear,
-    /// The destination already carries our signature for this exact game —
-    /// most likely a leftover from a previous `sync` or `migrate`. Safe to
-    /// overwrite: this run would write an equivalent shortcut anyway.
-    OwnedBySame,
-    /// The destination exists and must not be touched: either it carries no
-    /// `[wso:...]` ownership marker at all (hand-made, or from some other
-    /// tool) or it is signed for a different game entirely. `String`
-    /// explains which, for the message shown to the user.
-    Blocked(String),
-}
-
-/// The pure decision behind [`Collision`], kept independent of any
-/// filesystem or COM access so it is unit-testable without a real `.lnk`
-/// file: given what the destination's description field already contains
-/// (`None` when nothing is there yet), decide whether writing over it is
-/// safe.
-fn classify_existing(existing_description: Option<&str>, expected: &Signature) -> Collision {
-    let Some(desc) = existing_description else {
-        return Collision::Clear;
-    };
-    match decode(desc) {
-        Some(sig) if sig == *expected => Collision::OwnedBySame,
-        Some(sig) => Collision::Blocked(format!(
-            "already contains a shortcut for a different game ([wso:{}:{}])",
-            sig.platform.as_str(),
-            sig.id
-        )),
-        None => Collision::Blocked("already exists and was not created by this tool".to_string()),
-    }
-}
-
-/// Reads whatever currently sits at `dest`, if anything, and classifies it.
-/// A file that exists but cannot be read as a shell link at all (foreign
-/// data, or genuinely corrupt) is treated as blocked rather than clear —
-/// the safe direction, since this function must never claim something is
-/// safe to overwrite when it could not actually verify that.
-fn check_existing(dest: &Path, expected: &Signature) -> Collision {
-    if !dest.is_file() {
-        return Collision::Clear;
-    }
-    match read_lnk(dest) {
-        Ok(data) => classify_existing(Some(&data.description), expected),
-        Err(_) => Collision::Blocked("already exists but could not be read".to_string()),
-    }
-}
 
 /// Correction 1's decision, in code: prefer `icon_file` only once it is
 /// confirmed to still exist, otherwise fall back to the same candidate
@@ -330,54 +275,4 @@ pub fn run(cli: &Cli) -> i32 {
     }
 
     exit_code(failed)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::platform::Platform;
-
-    fn sig(id: &str) -> Signature {
-        Signature {
-            platform: Platform::Steam,
-            id: id.into(),
-        }
-    }
-
-    /// Nothing at `dest` yet: the ordinary case, always safe to proceed.
-    #[test]
-    fn classify_existing_is_clear_when_nothing_is_there() {
-        assert_eq!(classify_existing(None, &sig("105600")), Collision::Clear);
-    }
-
-    /// Named Risk 5's safe branch: a previous `sync` (or an earlier
-    /// `migrate` run) already left a `.lnk` signed for this *same* game.
-    /// Overwriting it is not "silently overwriting" — the file this run
-    /// would write is functionally the same shortcut, just refreshed.
-    #[test]
-    fn classify_existing_allows_overwriting_a_shortcut_owned_for_the_same_game() {
-        let existing = crate::shortcut::signature::encode("Terraria", &sig("105600"));
-        assert_eq!(
-            classify_existing(Some(&existing), &sig("105600")),
-            Collision::OwnedBySame
-        );
-    }
-
-    /// Named Risk 5's blocked branch: a `.lnk` signed for a *different*
-    /// game must never be silently clobbered.
-    #[test]
-    fn classify_existing_blocks_a_shortcut_owned_for_a_different_game() {
-        let existing = crate::shortcut::signature::encode("Some Other Game", &sig("999"));
-        let result = classify_existing(Some(&existing), &sig("105600"));
-        assert!(matches!(result, Collision::Blocked(_)), "got {result:?}");
-    }
-
-    /// Named Risk 5's other blocked branch: a foreign shortcut (hand-made,
-    /// or from another tool entirely, carrying no `[wso:...]` marker at
-    /// all) must never be treated as safe to overwrite.
-    #[test]
-    fn classify_existing_blocks_a_shortcut_with_no_ownership_marker() {
-        let result = classify_existing(Some("My own shortcut"), &sig("105600"));
-        assert!(matches!(result, Collision::Blocked(_)), "got {result:?}");
-    }
 }

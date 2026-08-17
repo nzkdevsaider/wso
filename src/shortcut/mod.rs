@@ -1,3 +1,4 @@
+pub mod collision;
 pub mod signature;
 pub mod url_legacy;
 pub mod writer;

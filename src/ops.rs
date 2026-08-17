@@ -4,16 +4,27 @@
 //! writes and deletions.
 //!
 //! The tool's core guarantee — it never deletes or modifies a `.lnk` it did
-//! not create — rests entirely on `scan_owned` claiming only shortcuts whose
-//! description carries the `[wso:platform:id]` marker (`shortcut::signature`).
-//! A shortcut without that marker is invisible to everything downstream:
-//! `plan()` never sees it, so `apply` can never act on it.
+//! not create — has two halves, and for a long time only the first was
+//! actually implemented.
+//!
+//! *Never deletes* rests on `scan_owned` claiming only shortcuts whose
+//! description carries the `[wso:platform:id]` marker
+//! (`shortcut::signature`). A shortcut without that marker is invisible to
+//! everything downstream: `plan()` never sees it, so `apply` can never
+//! delete it.
+//!
+//! *Never modifies* needs more than that, because a `Create` or a `Move`
+//! names a destination path rather than an existing owned shortcut — and a
+//! foreign file can be sitting at that path. `apply` therefore checks what
+//! is already there (`shortcut::collision`) before either of those two
+//! writes, and reports a blocked collision as a failed item.
 
 use crate::config::Config;
 use crate::icon;
 use crate::layout::{self, Organization};
 use crate::plan::{Action, DesiredShortcut, OwnedShortcut};
 use crate::platform::Game;
+use crate::shortcut::collision::{self, Collision};
 use crate::shortcut::signature::{decode, encode};
 use crate::shortcut::writer::{read_lnk, write_lnk};
 use crate::shortcut::LnkData;
@@ -165,15 +176,60 @@ fn display_name(path: &Path) -> String {
         .to_string()
 }
 
+/// Refuses to write at `dest` unless this tool can prove it owns whatever is
+/// already there. `Clear` (nothing at the path) and `OwnedBySame` (a leftover
+/// of ours for this very game — a stale copy from a previous run, or the new
+/// file of a `Move` whose cleanup half failed) both proceed; anything else
+/// becomes an `Err` the caller reports as a failed item.
+///
+/// This is the guarantee `README.md` states plainly — `sync` never modifies
+/// or removes a file it did not create — enforced at the two places that can
+/// break it. Only `Create` and `Move` need it: `Retarget` and `FixIcon` are
+/// emitted by `plan()` only for a path where an *owned* shortcut with the
+/// matching signature was already found, so their destination is proven ours
+/// before `apply` ever sees them.
+///
+/// Deliberately not gated behind `dry_run`: it only reads. Skipping it on a
+/// dry run would make the preview claim a create that the real run will
+/// refuse.
+fn check_collision(
+    dest: &Path,
+    expected: &crate::shortcut::signature::Signature,
+) -> Result<(), String> {
+    match collision::check_existing(dest, expected) {
+        Collision::Clear | Collision::OwnedBySame => Ok(()),
+        Collision::Blocked(reason) => Err(format!("{} {reason}", dest.display())),
+    }
+}
+
+/// The signature a `Move`'s destination must already carry, if it carries
+/// one at all. Unlike `Create`, `Action::Move` has no `sig` field, so it is
+/// recovered from the description this run is about to write — which
+/// `signature::encode` always terminates with the marker.
+///
+/// A description that will not decode cannot be proven to belong to any
+/// game, so there is no signature to compare a colliding file against and
+/// the move is refused rather than allowed through unchecked. That is the
+/// safe direction, and it is unreachable for anything `build_desired`
+/// produces.
+fn move_signature(lnk: &LnkData) -> Result<crate::shortcut::signature::Signature, String> {
+    decode(&lnk.description).ok_or_else(|| {
+        "the shortcut being moved carries no [wso:...] ownership marker, so what is already at \
+         the destination cannot be checked against it"
+            .to_string()
+    })
+}
+
 /// Applies actions one at a time. A failure on one shortcut is recorded and
 /// the run continues: one locked or otherwise unwritable file must never
 /// stop the rest of the batch from being processed.
 ///
-/// `dry_run` is genuinely inert: every filesystem-touching branch is gated
-/// behind `run`, so a dry run never creates a directory, writes a file,
-/// removes a file, or touches the icon cache (icon resolution already
+/// `dry_run` is genuinely inert: every filesystem-*modifying* branch is
+/// gated behind `run`, so a dry run never creates a directory, writes a
+/// file, removes a file, or touches the icon cache (icon resolution already
 /// happened earlier, in `build_desired`; `apply` itself never calls
-/// `icon::resolve`).
+/// `icon::resolve`). The read-only collision check above runs either way,
+/// so a preview and the real run agree about what is refused.
 pub fn apply(actions: &[Action], dry_run: bool) -> Vec<Outcome> {
     let mut outcomes = Vec::with_capacity(actions.len());
 
@@ -182,8 +238,10 @@ pub fn apply(actions: &[Action], dry_run: bool) -> Vec<Outcome> {
             Action::Create(d) => (
                 "create",
                 display_name(&d.path),
-                run(dry_run, || {
-                    write_lnk(&d.path, &d.lnk).map_err(|e| e.to_string())
+                check_collision(&d.path, &d.sig).and_then(|()| {
+                    run(dry_run, || {
+                        write_lnk(&d.path, &d.lnk).map_err(|e| e.to_string())
+                    })
                 }),
             ),
             Action::Retarget { path, lnk } => (
@@ -199,7 +257,9 @@ pub fn apply(actions: &[Action], dry_run: bool) -> Vec<Outcome> {
             Action::Move { from, to, lnk } => (
                 "move",
                 display_name(to),
-                run(dry_run, || {
+                move_signature(lnk)
+                    .and_then(|sig| check_collision(to, &sig))
+                    .and_then(|()| run(dry_run, || {
                     // Write the new file first. If this fails, nothing on
                     // disk has changed yet: `from` is untouched and `to`
                     // was never created.
@@ -225,7 +285,7 @@ pub fn apply(actions: &[Action], dry_run: bool) -> Vec<Outcome> {
                         })?;
                     }
                     Ok(())
-                }),
+                })),
             ),
             Action::DeleteOrphan(path) => (
                 "delete",
