@@ -2,7 +2,15 @@ use std::path::{Path, PathBuf};
 
 /// Filename fragments that never identify a game. Matched case-insensitively
 /// against the file stem.
-const NAME_BLOCKLIST: [&str; 10] = [
+///
+/// `busybox` and `quickeditdisable` were added after tModLoader was found to
+/// resolve to `LaunchUtils\busybox64.exe` on a real install: the game ships
+/// no `.exe` at all that represents it (it launches from a `.bat`), only
+/// these two helper utilities, and `busybox64.exe` was confirmed to carry an
+/// icon resource of its own — so without this entry `has_icon` would accept
+/// it and the shortcut would show BusyBox's generic icon instead of falling
+/// through to the game's librarycache artwork.
+const NAME_BLOCKLIST: [&str; 12] = [
     "crashhandler",
     "crashreport",
     "crashmailer",
@@ -13,6 +21,8 @@ const NAME_BLOCKLIST: [&str; 10] = [
     "vcredist",
     "dxsetup",
     "sendrpt",
+    "busybox",
+    "quickeditdisable",
 ];
 
 /// Directory names that only ever hold redistributables.
@@ -353,8 +363,9 @@ mod tests {
             /// under the install directory, bounded by the same depth used
             /// in production.
             candidates: &'static [(&'static str, u64)],
-            /// The relative path `pick_executable` is expected to return.
-            expected: &'static str,
+            /// The relative path `pick_executable` is expected to return, or
+            /// `None` for a game with no viable candidate at all.
+            expected: Option<&'static str>,
             /// Which rule in `pick_executable` actually decides this entry.
             decided_by: &'static str,
         }
@@ -369,7 +380,7 @@ mod tests {
                     ("dotNetFx40_Full_x86_x64.exe", 1_600_220),
                     ("dotNetFx40_Full_setup.exe", 889_416),
                 ],
-                expected: "Terraria.exe",
+                expected: Some("Terraria.exe"),
                 decided_by: "name score: both dotNetFx candidates are removed by the \
                     name blocklist (\"dotnetfx\"); between the two survivors, an exact \
                     match (100) beats TerrariaServer's prefix match (60). Terraria.exe \
@@ -383,7 +394,7 @@ mod tests {
                     (r"P3R\Binaries\Win64\P3R.exe", 366_251_968),
                     (r"Engine\Binaries\Win64\CrashReportClient.exe", 19_487_232),
                 ],
-                expected: r"P3R\Binaries\Win64\P3R.exe",
+                expected: Some(r"P3R\Binaries\Win64\P3R.exe"),
                 decided_by: "name blocklist: both candidates sit at the same depth (4), \
                     so depth does not distinguish them. CrashReportClient.exe is removed \
                     by the name blocklist (\"crashreport\"), leaving P3R.exe as the only \
@@ -397,7 +408,7 @@ mod tests {
                     ("CrashReport.exe", 155_125_104),
                     ("InstallerMessage.exe", 1_623_120),
                 ],
-                expected: "MonsterHunterWilds.exe",
+                expected: Some("MonsterHunterWilds.exe"),
                 decided_by: "name blocklist: CrashReport.exe (\"crashreport\") and \
                     InstallerMessage.exe (\"installer\") are both removed, leaving \
                     MonsterHunterWilds.exe as the only viable candidate.",
@@ -411,7 +422,7 @@ mod tests {
                     (r"ErrorReporting\x86\BlizzardError.exe", 908_416),
                     (r"ErrorReporting\x64\CrashMailer_64.exe", 450_768),
                 ],
-                expected: "Overwatch.exe",
+                expected: Some("Overwatch.exe"),
                 decided_by: "depth: Overwatch.exe is the only depth-1 candidate. The \
                     blocklist also removes CrashMailer_64.exe (\"crashmailer\"), but that \
                     candidate was already at depth 3 and so never affected the \
@@ -424,7 +435,7 @@ mod tests {
                     ("X4.exe", 55_412_768),
                     (r"support\drdump\sendrpt.exe", 911_872),
                 ],
-                expected: "X4.exe",
+                expected: Some("X4.exe"),
                 decided_by: "depth alone: X4.exe is the only depth-1 candidate. The other \
                     file is also removed by the name blocklist (\"sendrpt\"), but it is \
                     three levels deep either way, so depth already settles it.",
@@ -440,7 +451,7 @@ mod tests {
                     (r"bin\win64\vbsp.exe", 1_437_520),
                     (r"bin\win64\gmod.exe", 1_042_256),
                 ],
-                expected: "gmod.exe",
+                expected: Some("gmod.exe"),
                 decided_by: "depth alone: gmod.exe is the only depth-1 candidate. This is \
                     the shape that motivates the depth-before-size rule in the first \
                     place: a 430 KB launcher in the install root beats a 2.8 MB modelling \
@@ -456,7 +467,7 @@ mod tests {
                     (r"bin\crs-handler.exe", 1_188_520),
                     (r"tools\gguninst.exe", 79_928),
                 ],
-                expected: r"bin\helldivers2.exe",
+                expected: Some(r"bin\helldivers2.exe"),
                 decided_by: "name blocklist plus name score, not size: GGSetup.exe \
                     (\"setup\") and gguninst.exe (\"uninst\") are removed first, even \
                     though GGSetup.exe is close in size to the winner. Between the two \
@@ -470,10 +481,31 @@ mod tests {
                     ("UnityCrashHandler64.exe", 991_992),
                     ("Supermarket Together.exe", 667_648),
                 ],
-                expected: "Supermarket Together.exe",
+                expected: Some("Supermarket Together.exe"),
                 decided_by: "name blocklist: UnityCrashHandler64.exe (\"crashhandler\") is \
                     removed despite being the physically larger file, leaving \
                     Supermarket Together.exe as the only viable candidate.",
+            },
+            CorpusEntry {
+                game_name: "tModLoader",
+                install_dir_name: "tModLoader",
+                candidates: &[
+                    (r"LaunchUtils\busybox64.exe", 642_560),
+                    (r"dotnet\dotnet.exe", 142_096),
+                    (r"LaunchUtils\QuickEditDisable.exe", 5_120),
+                ],
+                expected: None,
+                decided_by: "name blocklist and directory blocklist together remove every \
+                    candidate: busybox64.exe and QuickEditDisable.exe are name-blocklisted \
+                    (\"busybox\", \"quickeditdisable\"), and dotnet.exe sits under a \
+                    directory-blocklisted `dotnet\\` folder. The game ships no executable \
+                    that represents it at all — it launches from a `.bat` file, and \
+                    busybox64.exe was independently confirmed to carry its own icon \
+                    resource, so without the blocklist entries the resolver would have \
+                    accepted it and shown BusyBox's generic icon instead of falling \
+                    through to the game's librarycache artwork. `pick_executable` \
+                    reporting `None` here is the truthful answer for a game with no \
+                    representative executable.",
             },
         ];
 
@@ -485,21 +517,33 @@ mod tests {
                     .iter()
                     .map(|(path, size)| c(path, *size))
                     .collect();
-                let picked = pick_executable(
-                    entry.game_name,
-                    entry.install_dir_name,
-                    &candidates,
-                )
-                .unwrap_or_else(|| {
-                    panic!("{}: expected a pick, got None", entry.game_name)
-                });
-                assert_eq!(
-                    picked.rel_path.to_str().unwrap(),
-                    entry.expected,
-                    "{}: decided by {}",
-                    entry.game_name,
-                    entry.decided_by
-                );
+                let picked = pick_executable(entry.game_name, entry.install_dir_name, &candidates);
+                match entry.expected {
+                    Some(expected) => {
+                        let picked = picked.unwrap_or_else(|| {
+                            panic!(
+                                "{}: expected {:?}, got None; decided by {}",
+                                entry.game_name, expected, entry.decided_by
+                            )
+                        });
+                        assert_eq!(
+                            picked.rel_path.to_str().unwrap(),
+                            expected,
+                            "{}: decided by {}",
+                            entry.game_name,
+                            entry.decided_by
+                        );
+                    }
+                    None => {
+                        assert!(
+                            picked.is_none(),
+                            "{}: expected None, got {:?}; decided by {}",
+                            entry.game_name,
+                            picked.map(|p| p.rel_path.clone()),
+                            entry.decided_by
+                        );
+                    }
+                }
             }
         }
     }

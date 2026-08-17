@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub enum IconError {
@@ -48,12 +48,50 @@ pub fn png_to_ico(src: &Path, dest: &Path) -> Result<(), IconError> {
         );
     }
 
-    if let Some(parent) = dest.parent() {
+    if let Some(parent) = dest.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| IconError::Write(e.to_string()))?;
     }
-    let file = std::fs::File::create(dest).map_err(|e| IconError::Write(e.to_string()))?;
-    dir.write(file).map_err(|e| IconError::Write(e.to_string()))?;
-    Ok(())
+
+    write_atomically(dest, |w| dir.write(w))
+}
+
+/// Writes the bytes produced by `write` into `dest` only if the write fully
+/// succeeds. The bytes go to a temporary file in the destination's own
+/// directory first and are renamed into place afterward — same-directory
+/// rename is atomic on Windows — and on any failure the temp file is
+/// removed and `dest` is left completely untouched.
+///
+/// This matters because `resolve()`'s cache check only tests whether `dest`
+/// exists: writing straight into `dest` and failing partway through (disk
+/// full, a permission error, an antivirus lock mid-write) would leave a
+/// corrupt or empty file there that gets served as a "valid" cached icon on
+/// every subsequent run, forever, with no retry.
+fn write_atomically(
+    dest: &Path,
+    write: impl FnOnce(&mut dyn std::io::Write) -> std::io::Result<()>,
+) -> Result<(), IconError> {
+    let parent = dest.parent().filter(|p| !p.as_os_str().is_empty());
+    let file_name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("icon");
+    let tmp_name = format!(".{file_name}.{}.tmp", std::process::id());
+    let tmp: PathBuf = match parent {
+        Some(p) => p.join(tmp_name),
+        None => PathBuf::from(tmp_name),
+    };
+
+    let outcome: Result<(), IconError> = (|| {
+        let mut file = std::fs::File::create(&tmp).map_err(|e| IconError::Write(e.to_string()))?;
+        write(&mut file).map_err(|e| IconError::Write(e.to_string()))
+    })();
+
+    if let Err(e) = outcome {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+
+    std::fs::rename(&tmp, dest).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        IconError::Write(e.to_string())
+    })
 }
 
 #[cfg(test)]
@@ -153,6 +191,64 @@ mod tests {
         png_to_ico(&src, &dest).unwrap();
 
         assert!(dest.is_file());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A conversion that can never even begin writing — because the
+    /// destination's parent cannot be created — must leave nothing behind
+    /// at the destination, not a stray empty file.
+    #[test]
+    fn a_failed_conversion_leaves_no_file_at_the_destination() {
+        let dir = scratch_dir("failed_conversion_no_partial_file");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("logo.png");
+        write_test_png(&src, 64);
+
+        // `blocker` is a regular file, not a directory, so nothing can ever
+        // be created underneath it — this deterministically forces
+        // `png_to_ico` down its failure path without needing a real
+        // disk-full or permission-denied condition.
+        let blocker = dir.join("blocker.txt");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let dest = blocker.join("out.ico");
+
+        assert!(png_to_ico(&src, &dest).is_err());
+        assert!(
+            !dest.exists(),
+            "a failed conversion must not leave anything at the destination"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The exact bug the atomic write closes: a write that fails partway —
+    /// after some bytes have already reached disk — must not leave those
+    /// partial bytes sitting at `dest`. `resolve()`'s cache check only
+    /// tests whether `dest` exists, so a half-written file left there would
+    /// be served as a permanently "valid" cached icon on every later run,
+    /// with no retry. Exercises `write_atomically` directly with a writer
+    /// that succeeds partially and then fails, which a real disk-full or
+    /// permission error cannot be forced to do deterministically.
+    #[test]
+    fn a_write_that_fails_partway_leaves_no_file_at_the_destination() {
+        let dir = scratch_dir("partial_write_no_partial_file");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("440.ico");
+
+        let result = write_atomically(&dest, |w| {
+            w.write_all(b"only some of the bytes")?;
+            Err(std::io::Error::other("simulated mid-write failure"))
+        });
+
+        assert!(result.is_err());
+        assert!(
+            !dest.exists(),
+            "a failed write must not leave a partial file at the destination"
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "the temporary file must be cleaned up, not left behind"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }
