@@ -94,7 +94,10 @@ impl GameProvider for EpicProvider {
         let mut games = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("item") {
+            // Case-insensitively: matching strictly made a `Fortnite.ITEM`
+            // manifest invisible, so the game was simply never detected —
+            // no error, and nothing to explain the absence.
+            if !crate::paths::has_extension(&path, "item") {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&path) else {

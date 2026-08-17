@@ -86,7 +86,12 @@ pub fn find(dirs: &[PathBuf]) -> Vec<LegacyUrl> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("url") {
+            // Case-insensitively: Windows filenames are, so a
+            // `Terraria.URL` is exactly as real a legacy shortcut as
+            // `Terraria.url`. Matching strictly made it invisible to
+            // `migrate`, leaving the user's blank-icon shortcut in place
+            // with nothing said about it.
+            if !crate::paths::has_extension(&path, "url") {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&path) else {
@@ -190,6 +195,28 @@ IconFile=C:\\Program Files (x86)\\Steam\\steam\\games\\01b545c997d68f6c4ac18ccef
 
         let found = find(std::slice::from_ref(&dir));
         assert_eq!(found.len(), 1);
+        assert_eq!(found[0].appid, "105600");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Windows filenames are case-insensitive, so `Terraria.URL` is exactly
+    /// as real a legacy Steam shortcut as `Terraria.url` — and File Explorer
+    /// will happily produce one via a rename. Matching the extension strictly
+    /// made such a file invisible to `migrate`, which would leave the user's
+    /// blank-icon shortcut in place and say nothing about it.
+    ///
+    /// The `.txt` sibling is what keeps this a test of case-insensitivity
+    /// rather than of "matches anything": it must still be skipped.
+    #[test]
+    fn find_reads_a_url_file_with_an_uppercase_extension() {
+        let dir = super::tests_support::unique_dir("find_uppercase_url");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Terraria.URL"), STEAM_URL).unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a url file").unwrap();
+
+        let found = find(std::slice::from_ref(&dir));
+        assert_eq!(found.len(), 1, "an uppercase .URL must still be found");
         assert_eq!(found[0].appid, "105600");
 
         std::fs::remove_dir_all(&dir).ok();
