@@ -1,7 +1,21 @@
 //! The `migrate` command: replaces the legacy `.url` shortcuts Steam
 //! creates directly (a web bookmark pointing at a `steam://` URI, which
 //! Windows shows with a blank generic icon — the exact complaint this whole
-//! tool exists to fix) with real `.lnk` shortcuts carrying a working icon.
+//! tool exists to fix) with real `.lnk` shortcuts, with an icon attached
+//! wherever one can actually be resolved.
+//!
+//! That last qualifier is deliberate, not decoration: this command must
+//! never claim an icon is guaranteed when it cannot verify that. If
+//! `SteamProvider::games` fails (a corrupt `libraryfolders.vdf` is not
+//! exotic), every legacy item loses its game lookup, so [`icon_for`] has
+//! nothing to fall back to once a missing `IconFile=` is rejected. Silently
+//! proceeding in that state would mean deleting the original `.url` files
+//! and writing icon-less `.lnk` shortcuts — this tool reproducing the exact
+//! blank-icon defect it exists to fix, while telling the user it did the
+//! opposite. So `run` below warns explicitly when the game lookup fails,
+//! the up-front message never promises a working icon unconditionally, and
+//! the summary counts and reports how many converted shortcuts actually
+//! ended up with no icon.
 //!
 //! Kept as its own module, separate from `commands`, specifically so the
 //! orchestration/presentation code already living in `commands.rs` does not
@@ -131,9 +145,23 @@ fn scan_roots() -> Vec<PathBuf> {
     roots
 }
 
+/// What came of attempting one legacy `.url`'s conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConvertOutcome {
+    /// `1` if this item failed (a blocked collision, a write failure, or a
+    /// successful write whose `.url` could then not be removed) or `0`
+    /// otherwise — the caller sums these into the overall failed-item
+    /// count.
+    pub failed: usize,
+    /// Whether the shortcut written for this item carries an icon. `Some`
+    /// exactly when `write_lnk` actually succeeded (there is a `.lnk` on
+    /// disk to ask the question about) — `true` if an icon was resolved for
+    /// it, `false` if it was written with none. `None` when no `.lnk` was
+    /// written at all: a blocked collision, a dry run, or a write failure.
+    pub has_icon: Option<bool>,
+}
+
 /// Converts one legacy `.url` into a `.lnk`, or reports why it could not.
-/// Returns `1` if this item failed or was blocked, `0` on success — the
-/// caller sums these into the overall failed-item count.
 ///
 /// Named Risk 1 (never destroy a shortcut that could not be replaced) is
 /// enforced by construction here: `legacy.path` is only ever removed after
@@ -144,15 +172,15 @@ fn scan_roots() -> Vec<PathBuf> {
 /// a `pub` building block `tests/ops_apply.rs` calls without going through
 /// a whole command's `run`. `run` below has no seams to inject a fake Steam
 /// installation or fake Desktop/Start Menu directories, so testing the
-/// actual collision-handling and never-destroy-on-failure guarantees has to
-/// happen at this level instead.
+/// actual collision-handling, never-destroy-on-failure, and icon-honesty
+/// guarantees has to happen at this level instead.
 pub fn convert_one(
     legacy: &LegacyUrl,
     steam: &SteamProvider,
     games: &[Game],
     cache: &Path,
     dry_run: bool,
-) -> usize {
+) -> ConvertOutcome {
     let name = legacy
         .path
         .file_stem()
@@ -170,15 +198,16 @@ pub fn convert_one(
         } else {
             eprintln!("  skipped {name}: {} {reason}", dest.display());
         }
-        return 1;
+        return ConvertOutcome { failed: 1, has_icon: None };
     }
 
     if dry_run {
         println!("  would convert {name} -> {}", dest.display());
-        return 0;
+        return ConvertOutcome { failed: 0, has_icon: None };
     }
 
     let resolved = icon_for(legacy, game, cache);
+    let has_icon = resolved.is_some();
     let data = LnkData {
         target: steam.root().join("steam.exe"),
         args: format!("-applaunch {}", legacy.appid),
@@ -190,17 +219,21 @@ pub fn convert_one(
     match write_lnk(&dest, &data) {
         Ok(()) => match std::fs::remove_file(&legacy.path) {
             Ok(()) => {
-                println!("  converted {name}");
-                0
+                if has_icon {
+                    println!("  converted {name}");
+                } else {
+                    println!("  converted {name} (no icon could be resolved for it)");
+                }
+                ConvertOutcome { failed: 0, has_icon: Some(has_icon) }
             }
             Err(e) => {
                 eprintln!("  converted {name}, but could not remove the .url: {e}");
-                1
+                ConvertOutcome { failed: 1, has_icon: Some(has_icon) }
             }
         },
         Err(e) => {
             eprintln!("  failed to convert {name}: {e}");
-            1
+            ConvertOutcome { failed: 1, has_icon: None }
         }
     }
 }
@@ -221,19 +254,54 @@ pub fn run(cli: &Cli) -> i32 {
     for f in &found {
         println!("  {}", f.path.display());
     }
-    println!("\nEach will be replaced by a .lnk with a working icon.");
+    println!(
+        "\nEach will be replaced by a .lnk, with an icon attached wherever one can be resolved."
+    );
 
     if !cli.dry_run && !confirm("Convert them now?", cli.yes) {
         println!("Cancelled.");
         return 0;
     }
 
-    let games = steam.games().unwrap_or_default();
+    // A failed game lookup is not fatal to migration — the appid needed to
+    // launch the game comes from the `.url` itself, not from this list, and
+    // refusing over a cosmetic problem would cost the user something real
+    // (their broken `.url` shortcuts stay broken) to avoid something merely
+    // ugly (a shortcut with no icon). But it must never be *silent*: with no
+    // games detected, `icon_for` has nothing to fall back to once a missing
+    // `IconFile=` is rejected, so every item converted this run is at real
+    // risk of losing its icon entirely.
+    let games = match steam.games() {
+        Ok(games) => games,
+        Err(e) => {
+            eprintln!(
+                "Warning: Steam's game list could not be read ({e}); icons may be missing from \
+                 shortcuts converted this run, since the fallback icon chain depends on it."
+            );
+            Vec::new()
+        }
+    };
     let cache = config::cache_dir();
     let mut failed = 0;
+    let mut converted = 0;
+    let mut without_icon = 0;
 
     for legacy in &found {
-        failed += convert_one(legacy, &steam, &games, &cache, cli.dry_run);
+        let outcome = convert_one(legacy, &steam, &games, &cache, cli.dry_run);
+        failed += outcome.failed;
+        if let Some(has_icon) = outcome.has_icon {
+            converted += 1;
+            if !has_icon {
+                without_icon += 1;
+            }
+        }
+    }
+
+    if without_icon > 0 {
+        println!(
+            "{without_icon} of {converted} converted shortcut(s) have no icon: the .url's \
+             IconFile was missing and no fallback icon could be resolved for them."
+        );
     }
 
     exit_code(failed)
