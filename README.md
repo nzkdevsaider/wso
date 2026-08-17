@@ -48,11 +48,25 @@ repeatedly against a real library of installed games. If something about
 Epic detection does not work as expected, that is the more likely place to
 look first.
 
-**`--dry-run` does not touch your Desktop or Start Menu, but it does write to
-this tool's own icon cache.** Resolving an icon (probing an executable,
-converting it, writing the result under `%LOCALAPPDATA%`) happens before any
-decision to apply or skip a change, so a dry run populates the cache exactly
-as a real run would. It creates and deletes no shortcut either way.
+**The icon-cache exception is not the same for every command.** Resolving an
+icon (probing an executable, converting it, writing the result under
+`%LOCALAPPDATA%`) happens as part of building the report of what to do, not
+as part of applying it — so whether `--dry-run` also skips the cache write
+depends on the command:
+
+- `wso sync --dry-run` and `wso status` (which has no `--dry-run` flag at
+  all — reporting *is* everything it does) both resolve icons while building
+  their report, so either can write a new file into the icon cache even
+  though neither ever touches your Desktop or Start Menu.
+- `wso migrate --dry-run` is fully inert: it prints what it would convert and
+  returns before resolving any icon, so it does not touch the cache either.
+- `wso clean` never resolves an icon in the first place — it only deletes
+  shortcuts it recognizes — so the cache is never involved, `--dry-run` or
+  not.
+
+In short: no command ever writes to your Desktop or Start Menu without your
+having applied the change for real, but `sync --dry-run` and `status` are the
+two that can still leave a new file in the icon cache.
 
 **The binary is unsigned.** Windows SmartScreen will show a blue "Windows
 protected your PC" warning the first time you run a downloaded `wso.exe`.
@@ -84,11 +98,15 @@ include.
 | `wso sync` | Create and update shortcuts for installed games. Safe to re-run. |
 | `wso migrate` | Convert Steam's broken `.url` shortcuts to real `.lnk` files. |
 | `wso clean` | Remove every shortcut `wso` created — nothing else. |
-| `wso status` | Show what exists and what is out of sync, without changing anything. |
+| `wso status` | Read your library and report what exists and what is out of sync. |
+
+`status` writes nothing to your Desktop or Start Menu, but — like
+`sync --dry-run` — it may still populate the icon cache; see the note above.
 
 Add `--dry-run` to `sync`, `migrate`, or `clean` to preview the actions that
-command would take without applying any of them (see the icon-cache note
-above).
+command would take without applying any of them to your Desktop or Start
+Menu (the icon cache is a partial exception — see above for exactly which
+commands touch it).
 
 ### Flags
 
@@ -96,12 +114,24 @@ above).
     --organize    flat | unified | per-platform
     --folder      folder name for unified or per-platform mode
     --platforms   steam,epic
-    --dry-run     show changes without applying them (icon cache excepted)
+    --dry-run     show changes without applying them (icon cache: see above)
     --yes         skip confirmation prompts
 
 Passing any of `--target`, `--organize`, or `--yes` skips the interactive
 wizard and runs non-interactively, which is what the flags exist for in
 scripts and CI.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Every item succeeded. |
+| `1` | At least one item failed (an unreadable platform, a target folder that could not be resolved, a shortcut that could not be written) — the run still processed everything else it could. |
+| `2` | The tool could not start at all, before any command logic ran (Windows COM failed to initialize). |
+
+A partial failure is always `1`, never `2` — `wso` does not abandon a whole
+run over one bad item, so scripts should treat `1` as "check the output for
+what failed," not as a total failure.
 
 ## Safety
 
