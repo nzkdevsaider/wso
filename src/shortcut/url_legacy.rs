@@ -188,7 +188,7 @@ IconFile=C:\\Program Files (x86)\\Steam\\steam\\games\\01b545c997d68f6c4ac18ccef
         std::fs::write(dir.join("Terraria.url"), STEAM_URL).unwrap();
         std::fs::write(dir.join("notes.txt"), "not a url file").unwrap();
 
-        let found = find(&[dir.clone()]);
+        let found = find(std::slice::from_ref(&dir));
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].appid, "105600");
 
@@ -208,7 +208,7 @@ IconFile=C:\\Program Files (x86)\\Steam\\steam\\games\\01b545c997d68f6c4ac18ccef
         )
         .unwrap();
 
-        let found = find(&[dir.clone()]);
+        let found = find(std::slice::from_ref(&dir));
         assert!(
             found.is_empty(),
             "a web bookmark must never be treated as a Steam shortcut"

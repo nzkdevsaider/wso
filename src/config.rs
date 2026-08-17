@@ -302,12 +302,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
 
-        let mut c = Config::default();
-        c.targets = vec![Target::Desktop, Target::StartMenu];
-        c.organization = Organization::PerPlatform {
-            parent: Some("Games".into()),
+        let mut c = Config {
+            targets: vec![Target::Desktop, Target::StartMenu],
+            organization: Organization::PerPlatform {
+                parent: Some("Games".into()),
+            },
+            exclusions: vec!["steam:228980".into(), "Wallpaper Engine".into()],
+            ..Default::default()
         };
-        c.exclusions = vec!["steam:228980".into(), "Wallpaper Engine".into()];
         c.icon_overrides
             .insert("steam:440".into(), PathBuf::from(r"C:\icons\tf2.ico"));
 
@@ -356,10 +358,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
 
-        let mut c = Config::default();
-        c.targets = vec![Target::Desktop];
-        c.organization = Organization::Flat;
-        c.exclusions = vec!["steam:1".into()];
+        let mut c = Config {
+            targets: vec![Target::Desktop],
+            organization: Organization::Flat,
+            exclusions: vec!["steam:1".into()],
+            ..Default::default()
+        };
         c.icon_overrides
             .insert("epic:foo".into(), PathBuf::from(r"D:\a\b.ico"));
 
@@ -596,8 +600,10 @@ mod tests {
 
     #[test]
     fn exclusions_match_by_qualified_id_or_by_name() {
-        let mut c = Config::default();
-        c.exclusions = vec!["steam:228980".into(), "Wallpaper Engine".into()];
+        let c = Config {
+            exclusions: vec!["steam:228980".into(), "Wallpaper Engine".into()],
+            ..Default::default()
+        };
 
         assert!(c.is_excluded(Platform::Steam, "228980", "Redistributables"));
         assert!(c.is_excluded(Platform::Steam, "431960", "Wallpaper Engine"));
@@ -612,8 +618,10 @@ mod tests {
     /// meant to be platform-agnostic.
     #[test]
     fn qualified_id_exclusion_does_not_leak_across_platforms() {
-        let mut c = Config::default();
-        c.exclusions = vec!["steam:228980".into()];
+        let c = Config {
+            exclusions: vec!["steam:228980".into()],
+            ..Default::default()
+        };
 
         assert!(c.is_excluded(Platform::Steam, "228980", "Redistributables"));
         assert!(!c.is_excluded(Platform::Epic, "228980", "Redistributables"));
@@ -624,8 +632,10 @@ mod tests {
     /// qualified-id exclusion for some platform named "x4".
     #[test]
     fn a_name_containing_a_colon_is_still_matched_as_a_plain_name() {
-        let mut c = Config::default();
-        c.exclusions = vec!["X4: Foundations".into()];
+        let c = Config {
+            exclusions: vec!["X4: Foundations".into()],
+            ..Default::default()
+        };
 
         assert!(c.is_excluded(Platform::Steam, "392160", "X4: Foundations"));
         assert!(c.is_excluded(Platform::Epic, "some-id", "x4: foundations"));
@@ -636,8 +646,10 @@ mod tests {
     /// the exclusion.
     #[test]
     fn whitespace_padded_exclusions_still_match() {
-        let mut c = Config::default();
-        c.exclusions = vec!["  steam:228980  ".into(), " Wallpaper Engine ".into()];
+        let c = Config {
+            exclusions: vec!["  steam:228980  ".into(), " Wallpaper Engine ".into()],
+            ..Default::default()
+        };
 
         assert!(c.is_excluded(Platform::Steam, "228980", "Redistributables"));
         assert!(c.is_excluded(Platform::Steam, "1", "Wallpaper Engine"));

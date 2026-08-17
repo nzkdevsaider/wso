@@ -181,7 +181,7 @@ mod tests {
         };
         // U+1F3AE VIDEO GAME — two UTF-16 units per character. 200 copies
         // is far past any plausible budget under the 260-unit limit.
-        let title: String = std::iter::repeat('🎮').take(200).collect();
+        let title: String = "🎮".repeat(200);
         let desc = encode(&title, &sig);
 
         let unit_count = desc.encode_utf16().count();

@@ -130,7 +130,7 @@ impl GameProvider for EpicProvider {
                 install_dir,
             });
         }
-        games.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        games.sort_by_key(|g| g.name.to_lowercase());
         Ok(games)
     }
 }

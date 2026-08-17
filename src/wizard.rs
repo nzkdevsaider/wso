@@ -349,8 +349,10 @@ mod tests {
     /// started doing so.
     #[test]
     fn preserves_exclusions() {
-        let mut cfg = Config::default();
-        cfg.exclusions = vec!["steam:1".into()];
+        let mut cfg = Config {
+            exclusions: vec!["steam:1".into()],
+            ..Default::default()
+        };
         apply_answers(
             &mut cfg,
             Answers {

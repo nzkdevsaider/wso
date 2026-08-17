@@ -148,6 +148,12 @@ fn report_detection(detection: Detection) -> (Vec<Game>, usize) {
     (detection.games, detection.failures.len())
 }
 
+/// A target paired with the base directory it resolved to.
+type ResolvedTarget = (Target, PathBuf);
+
+/// A target that could not be resolved, paired with what went wrong.
+type UnresolvedTarget = (Target, String);
+
 /// Splits `targets` into the bases that `resolve` could locate and the ones
 /// it could not, pairing each unresolved target with what went wrong.
 ///
@@ -160,7 +166,7 @@ fn report_detection(detection: Detection) -> (Vec<Game>, usize) {
 fn resolve_bases<F>(
     targets: impl IntoIterator<Item = Target>,
     resolve: F,
-) -> (Vec<(Target, PathBuf)>, Vec<(Target, String)>)
+) -> (Vec<ResolvedTarget>, Vec<UnresolvedTarget>)
 where
     F: Fn(Target) -> Result<PathBuf, LayoutError>,
 {
@@ -179,7 +185,7 @@ where
 /// many there were — every caller folds this straight into its own failed
 /// count, since a target this tool could not even look at is a partial
 /// failure, not something to pass over in silence.
-fn warn_unresolved(unresolved: &[(Target, String)], action: &str) -> usize {
+fn warn_unresolved(unresolved: &[UnresolvedTarget], action: &str) -> usize {
     for (target, detail) in unresolved {
         eprintln!(
             "Warning: could not resolve the {} folder; it was not {action} ({detail}).",
@@ -324,11 +330,9 @@ pub fn sync(cli: &Cli) -> i32 {
     let path = config::config_path();
     let mut cfg = load_config_with_warning(&path);
 
-    if !cli.is_non_interactive() {
-        if crate::wizard::run(&mut cfg).is_err() {
-            println!("Cancelled.");
-            return 0;
-        }
+    if !cli.is_non_interactive() && crate::wizard::run(&mut cfg).is_err() {
+        println!("Cancelled.");
+        return 0;
     }
     cli.apply_overrides(&mut cfg);
 
@@ -409,7 +413,7 @@ fn candidate_organizations(cfg: &config::Config) -> Vec<Organization> {
 /// rather than silently dropped — `clean` must tell the user it did not
 /// scan everywhere it promised to, not print a clean summary that quietly
 /// covered only part of the disk.
-fn clean_scan_dirs(cfg: &config::Config) -> (Vec<PathBuf>, Vec<(Target, String)>) {
+fn clean_scan_dirs(cfg: &config::Config) -> (Vec<PathBuf>, Vec<UnresolvedTarget>) {
     let (resolved, unresolved) =
         resolve_bases([Target::Desktop, Target::StartMenu], layout::target_dir);
 
@@ -522,9 +526,11 @@ mod tests {
     /// stale-layout scenario this function primarily exists for.
     #[test]
     fn candidate_organizations_always_includes_the_currently_configured_layout() {
-        let mut cfg = config::Config::default();
-        cfg.organization = Organization::PerPlatform {
-            parent: Some("Juegos".into()),
+        let cfg = config::Config {
+            organization: Organization::PerPlatform {
+                parent: Some("Juegos".into()),
+            },
+            ..Default::default()
         };
 
         let orgs = candidate_organizations(&cfg);
@@ -543,9 +549,11 @@ mod tests {
     /// cannot detect.
     #[test]
     fn candidate_organizations_includes_the_default_games_folder_even_when_not_configured() {
-        let mut cfg = config::Config::default();
-        cfg.organization = Organization::PerPlatform {
-            parent: Some("Juegos".into()),
+        let cfg = config::Config {
+            organization: Organization::PerPlatform {
+                parent: Some("Juegos".into()),
+            },
+            ..Default::default()
         };
 
         let orgs = candidate_organizations(&cfg);
@@ -580,9 +588,11 @@ mod tests {
     /// keys on the folder name, not merely on "is this the default".
     #[test]
     fn candidate_organizations_does_not_duplicate_when_configured_name_is_the_default() {
-        let mut cfg = config::Config::default();
-        cfg.organization = Organization::Unified {
-            folder: "Games".into(),
+        let cfg = config::Config {
+            organization: Organization::Unified {
+                folder: "Games".into(),
+            },
+            ..Default::default()
         };
 
         let orgs = candidate_organizations(&cfg);

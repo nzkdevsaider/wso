@@ -70,7 +70,7 @@ fn scan_owned_claims_only_the_signed_shortcut_and_skips_everything_else() {
     // A directory that happens to end in `.lnk`. Must never be read as a file.
     std::fs::create_dir_all(dir.join("Weird.lnk")).unwrap();
 
-    let owned = scan_owned(&[dir.clone()]);
+    let owned = scan_owned(std::slice::from_ref(&dir));
     assert_eq!(owned.len(), 1, "only the signed shortcut is ours");
     assert_eq!(owned[0].sig, sig);
 
@@ -106,7 +106,7 @@ fn scan_owned_claims_a_signed_shortcut_with_an_uppercase_extension() {
     )
     .unwrap();
 
-    let owned = scan_owned(&[dir.clone()]);
+    let owned = scan_owned(std::slice::from_ref(&dir));
     assert_eq!(
         owned.len(),
         1,

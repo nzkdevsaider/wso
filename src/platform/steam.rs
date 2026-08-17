@@ -145,7 +145,7 @@ impl GameProvider for SteamProvider {
                 games.push(self.build_game(app, install_dir));
             }
         }
-        games.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        games.sort_by_key(|g| g.name.to_lowercase());
         Ok(games)
     }
 }
@@ -204,6 +204,57 @@ pub(crate) fn pick_library_image(dir: &Path) -> Option<PathBuf> {
         })
         .max_by_key(|(_, size)| *size)
         .map(|(path, _)| path)
+}
+
+#[cfg(windows)]
+fn registry_roots() -> Vec<PathBuf> {
+    use windows::core::w;
+    use windows::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ,
+    };
+
+    let mut out = Vec::new();
+    let queries = [
+        (
+            HKEY_CURRENT_USER,
+            w!("Software\\Valve\\Steam"),
+            w!("SteamPath"),
+        ),
+        (
+            HKEY_LOCAL_MACHINE,
+            w!("SOFTWARE\\WOW6432Node\\Valve\\Steam"),
+            w!("InstallPath"),
+        ),
+    ];
+
+    for (hkey, subkey, value) in queries {
+        let mut buf = [0u16; 512];
+        let mut size = (buf.len() * 2) as u32;
+        let status = unsafe {
+            RegGetValueW(
+                hkey,
+                subkey,
+                value,
+                RRF_RT_REG_SZ,
+                None,
+                Some(buf.as_mut_ptr() as *mut _),
+                Some(&mut size),
+            )
+        };
+        if status.is_ok() {
+            let len = (size as usize / 2).saturating_sub(1);
+            let s = String::from_utf16_lossy(&buf[..len]);
+            if !s.is_empty() {
+                out.push(PathBuf::from(s));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(not(windows))]
+fn registry_roots() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -350,55 +401,4 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(pick_library_image(&dir), None);
     }
-}
-
-#[cfg(windows)]
-fn registry_roots() -> Vec<PathBuf> {
-    use windows::core::w;
-    use windows::Win32::System::Registry::{
-        RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ,
-    };
-
-    let mut out = Vec::new();
-    let queries = [
-        (
-            HKEY_CURRENT_USER,
-            w!("Software\\Valve\\Steam"),
-            w!("SteamPath"),
-        ),
-        (
-            HKEY_LOCAL_MACHINE,
-            w!("SOFTWARE\\WOW6432Node\\Valve\\Steam"),
-            w!("InstallPath"),
-        ),
-    ];
-
-    for (hkey, subkey, value) in queries {
-        let mut buf = [0u16; 512];
-        let mut size = (buf.len() * 2) as u32;
-        let status = unsafe {
-            RegGetValueW(
-                hkey,
-                subkey,
-                value,
-                RRF_RT_REG_SZ,
-                None,
-                Some(buf.as_mut_ptr() as *mut _),
-                Some(&mut size),
-            )
-        };
-        if status.is_ok() {
-            let len = (size as usize / 2).saturating_sub(1);
-            let s = String::from_utf16_lossy(&buf[..len]);
-            if !s.is_empty() {
-                out.push(PathBuf::from(s));
-            }
-        }
-    }
-    out
-}
-
-#[cfg(not(windows))]
-fn registry_roots() -> Vec<PathBuf> {
-    Vec::new()
 }
