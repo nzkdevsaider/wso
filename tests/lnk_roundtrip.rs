@@ -398,3 +398,84 @@ fn write_lnk_rejects_arguments_one_unit_over_the_buffer_limit_and_creates_no_fil
     assert!(!lnk.exists(), "a rejected write must not create a file");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// `signature::encode` performs no validation, while `decode` rejects an id
+/// containing `:`, `[` or `]` — and Epic's id is the manifest's `AppName`
+/// verbatim. Such an id used to produce a perfectly valid `.lnk` that
+/// `ops::scan_owned` could never claim back: `clean` could not remove it,
+/// and every later `sync` would create another duplicate beside it, forever.
+///
+/// `write_lnk` refuses it instead, before touching the filesystem — so the
+/// worst case is one reported failure for one game, not a file the user can
+/// only get rid of by hand. The `is_file` assertion is what distinguishes
+/// "refused up front" from "wrote it and then complained".
+#[test]
+fn write_lnk_refuses_a_description_whose_ownership_marker_cannot_be_read_back() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("lnk_unreadable_marker");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lnk = dir.join("Fall Guys.lnk");
+
+    let sig = Signature {
+        platform: Platform::Epic,
+        id: "Fall:Guys".into(),
+    };
+    let description = encode("Fall Guys", &sig);
+    assert_eq!(
+        decode(&description),
+        None,
+        "sanity: this id is one decode cannot recover"
+    );
+
+    let result = write_lnk(
+        &lnk,
+        &LnkData {
+            target: PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into()))
+                .join("explorer.exe"),
+            args: String::new(),
+            working_dir: None,
+            icon: None,
+            description,
+        },
+    );
+
+    assert!(result.is_err(), "an unrecoverable marker must be refused");
+    assert!(
+        !lnk.exists(),
+        "the refusal must happen before anything reaches disk"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The guard must not turn `write_lnk` into something that refuses ordinary
+/// work: the same shortcut with an id `decode` can recover is written
+/// normally.
+#[test]
+fn write_lnk_still_accepts_a_description_whose_marker_reads_back() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("lnk_readable_marker");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lnk = dir.join("Fall Guys.lnk");
+
+    let sig = Signature {
+        platform: Platform::Epic,
+        id: "FallGuys".into(),
+    };
+    write_lnk(
+        &lnk,
+        &LnkData {
+            target: PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into()))
+                .join("explorer.exe"),
+            args: String::new(),
+            working_dir: None,
+            icon: None,
+            description: encode("Fall Guys", &sig),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(decode(&read_lnk(&lnk).unwrap().description), Some(sig));
+
+    std::fs::remove_dir_all(&dir).ok();
+}

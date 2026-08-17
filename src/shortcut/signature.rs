@@ -79,6 +79,28 @@ fn truncate_to_utf16_budget(value: &str, budget: usize) -> String {
     truncated
 }
 
+/// Whether `description` presents itself as one of ours — it contains the
+/// `[wso:` that opens an ownership marker and ends with the `]` that closes
+/// one — while [`decode`] cannot actually recover a signature from it.
+///
+/// This is the one shape a shortcut must never be written in, and nothing
+/// upstream prevents it: [`encode`] performs no validation of its own, while
+/// `decode` rejects an id containing `:`, `[` or `]`, and Epic's id is the
+/// manifest's `AppName` verbatim (`platform::epic`). An `AppName` carrying
+/// any of those three characters would produce a perfectly valid `.lnk`
+/// that `ops::scan_owned` can never claim back: `clean` could not remove it,
+/// and every later `sync` would create a duplicate beside it, forever, with
+/// no way for the user to stop it short of deleting the file by hand.
+///
+/// Defined by running `decode` rather than by restating its rules, so the
+/// two can never drift apart. `writer::write_lnk` refuses such a
+/// description before touching the filesystem, which turns an
+/// unmanageable-forever shortcut into an ordinary reported per-item failure.
+pub fn claims_ownership_but_does_not_decode(description: &str) -> bool {
+    let trimmed = description.trim_end();
+    trimmed.ends_with(SUFFIX) && trimmed.contains(PREFIX) && decode(trimmed).is_none()
+}
+
 pub fn decode(description: &str) -> Option<Signature> {
     let trimmed = description.trim_end();
     if !trimmed.ends_with(SUFFIX) {
@@ -137,6 +159,102 @@ mod tests {
         assert_eq!(decode("[wso:steam:440] leading marker"), None);
         assert_eq!(decode("Cool Game [wso:steam:105600] notes here]"), None);
         assert_eq!(decode("Something [wso:steam:12]]"), None);
+    }
+
+    /// Ids chosen to attack the marker format itself. Steam appids are
+    /// numeric, but Epic's id is the manifest's `AppName` verbatim
+    /// (`platform::epic`) — an arbitrary vendor-supplied string this crate
+    /// never inspects — so the interesting cases are the three characters
+    /// `decode` treats structurally (`:`, `[`, `]`), the empty id it also
+    /// rejects, and a whole marker smuggled inside an id.
+    const ADVERSARIAL_IDS: &[&str] = &[
+        "440",
+        "Fortnite",
+        "Fall-Guys_1.2",
+        "0a2d9f",
+        "",
+        "Game:Name",
+        "a:b:c",
+        "Game[Name",
+        "Game]Name",
+        "]",
+        "[",
+        "[wso:steam:440]",
+        "440] and more",
+        "with space",
+        "🎮",
+        "…",
+    ];
+
+    /// The property that matters is not "every id round-trips" — three
+    /// characters genuinely cannot survive this marker format — but that
+    /// there is no third outcome. Either `decode` recovers exactly the
+    /// signature `encode` was given, or the description is one
+    /// `writer::write_lnk` refuses outright. What must never happen is a
+    /// `.lnk` reaching disk that `ops::scan_owned` cannot claim back:
+    /// `clean` could never remove it, and every later `sync` would create a
+    /// duplicate beside it, forever.
+    ///
+    /// `encode` performed no validation at all before this guard existed, so
+    /// an Epic `AppName` containing a colon produced exactly that shortcut,
+    /// silently.
+    #[test]
+    fn every_id_either_round_trips_exactly_or_is_refused_before_it_can_be_written() {
+        for id in ADVERSARIAL_IDS {
+            for platform in [Platform::Steam, Platform::Epic] {
+                let sig = Signature {
+                    platform,
+                    id: (*id).to_string(),
+                };
+                let desc = encode("Some Game", &sig);
+
+                match decode(&desc) {
+                    Some(recovered) => {
+                        assert_eq!(
+                            recovered, sig,
+                            "id {id:?} decoded, but not back to the signature it was encoded \
+                             from; description was {desc:?}"
+                        );
+                        assert!(
+                            !claims_ownership_but_does_not_decode(&desc),
+                            "id {id:?} round-trips, so it must not be refused: {desc:?}"
+                        );
+                    }
+                    None => assert!(
+                        claims_ownership_but_does_not_decode(&desc),
+                        "id {id:?} produced a description that cannot be decoded yet would not \
+                         be refused: {desc:?} — this is the shortcut that can never be claimed \
+                         back"
+                    ),
+                }
+            }
+        }
+    }
+
+    /// At least one adversarial id must actually take the refused branch
+    /// above, or the property test would pass just as happily against a
+    /// corpus of well-behaved ids and prove nothing about the guard.
+    #[test]
+    fn a_colon_in_an_id_is_refused_rather_than_silently_encoded() {
+        let sig = Signature {
+            platform: Platform::Epic,
+            id: "Fall:Guys".into(),
+        };
+        let desc = encode("Fall Guys", &sig);
+        assert_eq!(decode(&desc), None, "sanity: this id cannot round-trip");
+        assert!(claims_ownership_but_does_not_decode(&desc), "{desc:?}");
+    }
+
+    /// The guard must not fire on an ordinary foreign description that never
+    /// claimed to be ours in the first place — that would turn `write_lnk`
+    /// into something that refuses perfectly good work.
+    #[test]
+    fn a_description_with_no_marker_at_all_is_not_treated_as_a_broken_marker() {
+        assert!(!claims_ownership_but_does_not_decode("My own shortcut"));
+        assert!(!claims_ownership_but_does_not_decode(""));
+        assert!(!claims_ownership_but_does_not_decode(
+            "Team Fortress 2 [Beta]"
+        ));
     }
 
     #[test]

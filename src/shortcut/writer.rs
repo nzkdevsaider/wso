@@ -59,6 +59,15 @@ pub enum ShortcutError {
         len: usize,
         limit: usize,
     },
+    /// The description carries something shaped like this tool's ownership
+    /// marker that `shortcut::signature::decode` cannot read back. Writing
+    /// it would produce a `.lnk` that `ops::scan_owned` can never claim:
+    /// `clean` could not remove it and every later `sync` would create a
+    /// duplicate beside it. Refusing up front turns that into an ordinary
+    /// reported failure for one item.
+    UnreadableOwnershipMarker {
+        description: String,
+    },
 }
 
 impl std::fmt::Display for ShortcutError {
@@ -70,11 +79,37 @@ impl std::fmt::Display for ShortcutError {
                 f,
                 "{field} is {len} UTF-16 code units long, which exceeds the {limit}-unit limit a shell link can round-trip"
             ),
+            ShortcutError::UnreadableOwnershipMarker { description } => write!(
+                f,
+                "the description \"{description}\" carries an ownership marker this tool could \
+                 not read back, most likely because the game's id contains ':', '[' or ']'; \
+                 writing it would produce a shortcut that could never be recognized, updated \
+                 or removed again"
+            ),
         }
     }
 }
 
 impl std::error::Error for ShortcutError {}
+
+/// Refuses a description whose `[wso:...]` ownership marker cannot be
+/// decoded back into a signature — see
+/// `signature::claims_ownership_but_does_not_decode` for why such a shortcut
+/// would be unmanageable forever. Checked here, alongside the length limits,
+/// because this is the single choke point every write passes through:
+/// `sync`, `migrate`, and anything added later.
+///
+/// Not `#[cfg(windows)]`-gated, so the rule is compiled and unit-tested on
+/// every platform.
+fn check_ownership_marker(description: &str) -> Result<(), ShortcutError> {
+    if crate::shortcut::signature::claims_ownership_but_does_not_decode(description) {
+        Err(ShortcutError::UnreadableOwnershipMarker {
+            description: description.to_string(),
+        })
+    } else {
+        Ok(())
+    }
+}
 
 /// Rejects a field before any file or COM object is touched if it cannot
 /// survive a write-then-read round trip intact, per the limits measured
@@ -141,6 +176,7 @@ mod imp {
     pub fn write_lnk(path: &Path, data: &LnkData) -> Result<(), ShortcutError> {
         check_round_trippable("description", &data.description, DESCRIPTION_LIMIT_UTF16)?;
         check_round_trippable("args", &data.args, ARGS_LIMIT_UTF16)?;
+        check_ownership_marker(&data.description)?;
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| ShortcutError::Io(e.to_string()))?;
