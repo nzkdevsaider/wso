@@ -32,9 +32,155 @@ pub fn sanitize_filename(name: &str) -> String {
     trimmed.to_string()
 }
 
+use crate::platform::Platform;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Target {
+    Desktop,
+    StartMenu,
+}
+
+impl Target {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Target::Desktop => "Desktop",
+            Target::StartMenu => "Start Menu",
+        }
+    }
+}
+
+/// Struct variants throughout, not newtype variants: Task 11 serializes this
+/// to TOML under an internal tag, which newtype variants cannot represent.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "mode")]
+pub enum Organization {
+    /// Shortcuts sit directly in the target directory.
+    Flat,
+    /// One folder holds every platform's shortcuts.
+    Unified { folder: String },
+    /// One folder per platform, optionally nested under a shared parent.
+    PerPlatform { parent: Option<String> },
+}
+
+#[derive(Debug)]
+pub enum LayoutError {
+    UnknownFolder(String),
+}
+
+impl std::fmt::Display for LayoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LayoutError::UnknownFolder(d) => {
+                write!(f, "could not locate a Windows known folder: {d}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for LayoutError {}
+
+pub fn shortcut_dir(base: &Path, org: &Organization, platform: Platform) -> PathBuf {
+    match org {
+        Organization::Flat => base.to_path_buf(),
+        Organization::Unified { folder } => base.join(sanitize_filename(folder)),
+        Organization::PerPlatform { parent } => {
+            let root = match parent {
+                Some(p) => base.join(sanitize_filename(p)),
+                None => base.to_path_buf(),
+            };
+            root.join(sanitize_filename(platform.display_name()))
+        }
+    }
+}
+
+/// Every directory the tool may place shortcuts into under `base`. Used to
+/// know where to scan for shortcuts we already own.
+pub fn managed_dirs(base: &Path, org: &Organization) -> Vec<PathBuf> {
+    match org {
+        Organization::Flat | Organization::Unified { .. } => {
+            vec![shortcut_dir(base, org, Platform::Steam)]
+        }
+        Organization::PerPlatform { .. } => vec![
+            shortcut_dir(base, org, Platform::Steam),
+            shortcut_dir(base, org, Platform::Epic),
+        ],
+    }
+}
+
+/// Produces a unique, filesystem-safe basename for each entry, in input order.
+///
+/// Two games can legitimately share a title across platforms, and sanitization
+/// can turn two different titles into the same string, so uniqueness is
+/// decided after sanitization rather than before.
+pub fn assign_filenames(entries: &[(Platform, String)]) -> Vec<String> {
+    let sanitized: Vec<String> = entries
+        .iter()
+        .map(|(_, name)| sanitize_filename(name))
+        .collect();
+
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for name in &sanitized {
+        *counts.entry(name.as_str()).or_insert(0) += 1;
+    }
+
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(entries.len());
+
+    for (i, base) in sanitized.iter().enumerate() {
+        let mut candidate = if counts[base.as_str()] > 1 {
+            format!("{base} ({})", entries[i].0.display_name())
+        } else {
+            base.clone()
+        };
+
+        let mut n = 2;
+        while used.contains(&candidate) {
+            candidate = format!("{base} ({}) {n}", entries[i].0.display_name());
+            n += 1;
+        }
+
+        used.insert(candidate.clone());
+        out.push(candidate);
+    }
+    out
+}
+
+#[cfg(windows)]
+pub fn target_dir(target: Target) -> Result<PathBuf, LayoutError> {
+    use windows::Win32::UI::Shell::{
+        FOLDERID_Desktop, FOLDERID_Programs, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
+    };
+
+    // FOLDERID_Programs is the per-user Start Menu. FOLDERID_CommonPrograms
+    // is deliberately never used: writing there would require elevation.
+    let id = match target {
+        Target::Desktop => FOLDERID_Desktop,
+        Target::StartMenu => FOLDERID_Programs,
+    };
+
+    unsafe {
+        let pwstr = SHGetKnownFolderPath(&id, KF_FLAG_DEFAULT, None)
+            .map_err(|e| LayoutError::UnknownFolder(e.to_string()))?;
+        let s = pwstr
+            .to_string()
+            .map_err(|e| LayoutError::UnknownFolder(e.to_string()))?;
+        windows::Win32::System::Com::CoTaskMemFree(Some(pwstr.0 as *const _));
+        Ok(PathBuf::from(s))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn target_dir(_target: Target) -> Result<PathBuf, LayoutError> {
+    Err(LayoutError::UnknownFolder("Windows only".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::Platform;
+    use std::path::PathBuf;
 
     #[test]
     fn strips_illegal_characters() {
@@ -66,5 +212,128 @@ mod tests {
     fn falls_back_when_nothing_survives() {
         assert_eq!(sanitize_filename("..."), "_");
         assert_eq!(sanitize_filename(""), "_");
+    }
+
+    #[test]
+    fn flat_mode_uses_the_base_directory() {
+        let base = PathBuf::from(r"C:\Desktop");
+        assert_eq!(
+            shortcut_dir(&base, &Organization::Flat, Platform::Steam),
+            base
+        );
+    }
+
+    #[test]
+    fn unified_mode_uses_one_folder_for_every_platform() {
+        let base = PathBuf::from(r"C:\Desktop");
+        let org = Organization::Unified { folder: "Games".into() };
+        assert_eq!(
+            shortcut_dir(&base, &org, Platform::Steam),
+            base.join("Games")
+        );
+        assert_eq!(
+            shortcut_dir(&base, &org, Platform::Epic),
+            base.join("Games")
+        );
+    }
+
+    #[test]
+    fn per_platform_mode_splits_by_platform() {
+        let base = PathBuf::from(r"C:\Desktop");
+        let org = Organization::PerPlatform { parent: None };
+        assert_eq!(
+            shortcut_dir(&base, &org, Platform::Steam),
+            base.join("Steam")
+        );
+
+        let nested = Organization::PerPlatform { parent: Some("Games".into()) };
+        assert_eq!(
+            shortcut_dir(&base, &nested, Platform::Epic),
+            base.join("Games").join("Epic")
+        );
+    }
+
+    #[test]
+    fn folder_names_are_sanitized_too() {
+        let base = PathBuf::from(r"C:\Desktop");
+        let org = Organization::Unified { folder: "My: Games".into() };
+        assert_eq!(
+            shortcut_dir(&base, &org, Platform::Steam),
+            base.join("My Games")
+        );
+    }
+
+    #[test]
+    fn distinct_names_are_left_alone() {
+        let entries = [
+            (Platform::Steam, "Terraria".to_string()),
+            (Platform::Epic, "Fall Guys".to_string()),
+        ];
+        assert_eq!(assign_filenames(&entries), vec!["Terraria", "Fall Guys"]);
+    }
+
+    #[test]
+    fn cross_platform_collisions_get_a_platform_suffix() {
+        let entries = [
+            (Platform::Steam, "Fallout 4".to_string()),
+            (Platform::Epic, "Fallout 4".to_string()),
+        ];
+        assert_eq!(
+            assign_filenames(&entries),
+            vec!["Fallout 4 (Steam)", "Fallout 4 (Epic)"]
+        );
+    }
+
+    #[test]
+    fn same_platform_collisions_get_a_numeric_suffix() {
+        let entries = [
+            (Platform::Steam, "Portal".to_string()),
+            (Platform::Steam, "Portal".to_string()),
+            (Platform::Steam, "Portal".to_string()),
+        ];
+        assert_eq!(
+            assign_filenames(&entries),
+            vec!["Portal (Steam)", "Portal (Steam) 2", "Portal (Steam) 3"]
+        );
+    }
+
+    #[test]
+    fn collisions_are_detected_after_sanitization() {
+        let entries = [
+            (Platform::Steam, "X4: Foundations".to_string()),
+            (Platform::Epic, "X4 Foundations".to_string()),
+        ];
+        assert_eq!(
+            assign_filenames(&entries),
+            vec!["X4 Foundations (Steam)", "X4 Foundations (Epic)"]
+        );
+    }
+
+    #[test]
+    fn managed_dirs_lists_every_directory_we_may_own() {
+        let base = PathBuf::from(r"C:\Desktop");
+        assert_eq!(managed_dirs(&base, &Organization::Flat), vec![base.clone()]);
+        assert_eq!(
+            managed_dirs(&base, &Organization::Unified { folder: "Games".into() }),
+            vec![base.join("Games")]
+        );
+        assert_eq!(
+            managed_dirs(&base, &Organization::PerPlatform { parent: Some("Games".into()) }),
+            vec![base.join("Games").join("Steam"), base.join("Games").join("Epic")]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolves_per_user_known_folders() {
+        let desktop = target_dir(Target::Desktop).unwrap();
+        let start = target_dir(Target::StartMenu).unwrap();
+        assert!(desktop.is_dir(), "desktop should exist: {}", desktop.display());
+        assert!(start.is_dir(), "start menu should exist: {}", start.display());
+        assert!(
+            start.to_string_lossy().contains("AppData"),
+            "must be the per-user Start Menu, got {}",
+            start.display()
+        );
     }
 }
