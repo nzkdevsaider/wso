@@ -56,6 +56,22 @@ pub enum Action {
 /// the first is reconciled; every later one is skipped with
 /// `SkipReason::DuplicateSignature` rather than also acting on whatever the
 /// first entry already claimed.
+///
+/// Two `owned` entries can also legitimately share a signature — for
+/// instance, the write half of a `Move` can succeed while the removal of
+/// the old file fails (see `ops::apply`), leaving both the old and the new
+/// `.lnk` on disk with the same signature until the next run reconciles
+/// them. When that happens, the entry whose `path` already equals `d.path`
+/// is preferred over the first entry by position: this is what makes
+/// recovery deterministic and correct rather than an accident of whatever
+/// order `scan_owned` happened to return the two files in. Without the
+/// path preference, picking the *stale* entry first would emit a `Move`
+/// (rewriting the already-correct new file, harmless on its own) followed
+/// by a `DeleteOrphan` for the *other* entry — which is the new file,
+/// deleting the shortcut the previous run had already gotten right, so the
+/// shortcut disappears entirely instead of recovering. Preferring the
+/// already-correctly-placed entry means it is matched and skipped, and the
+/// stale one is the one left to become the orphan.
 pub fn plan(desired: &[DesiredShortcut], owned: &[OwnedShortcut]) -> Vec<Action> {
     let mut actions = Vec::new();
     let mut matched: Vec<bool> = vec![false; owned.len()];
@@ -71,7 +87,10 @@ pub fn plan(desired: &[DesiredShortcut], owned: &[OwnedShortcut]) -> Vec<Action>
         }
         claimed_signatures.push(&d.sig);
 
-        let existing = owned.iter().position(|o| o.sig == d.sig);
+        let existing = owned
+            .iter()
+            .position(|o| o.sig == d.sig && o.path == d.path)
+            .or_else(|| owned.iter().position(|o| o.sig == d.sig));
 
         let Some(idx) = existing else {
             actions.push(Action::Create(d.clone()));
@@ -378,6 +397,46 @@ mod tests {
             &actions[1],
             Action::DeleteOrphan(p) if p == &PathBuf::from(r"C:\D\TF2 - Copy.lnk")
         ));
+    }
+
+    /// The test above happens to place the correctly-located owned entry
+    /// first, so it cannot distinguish "matches by path" from "matches by
+    /// position and got lucky." This reaches the same duplicate-signature
+    /// situation a partially-failed `Move` produces (see `ops::apply`'s
+    /// `Move` handling): a stale copy left at the old path, and a correct
+    /// copy already sitting at the desired path. Supplying the two owned
+    /// entries in both orders proves the outcome — the correctly-placed
+    /// entry is matched and skipped, the stale one becomes the orphan — is
+    /// independent of scan order, not an accident of whichever order
+    /// `scan_owned` happened to return them in.
+    #[test]
+    fn a_duplicate_owned_signature_prefers_the_entry_at_the_desired_path_regardless_of_scan_order() {
+        let d = [desired("440", r"C:\D\TF2.lnk", "tf2.exe")];
+        let stale = owned("440", r"C:\D\Old\TF2.lnk", "tf2.exe");
+        let correct = owned("440", r"C:\D\TF2.lnk", "tf2.exe");
+
+        for o in [
+            vec![stale.clone(), correct.clone()],
+            vec![correct.clone(), stale.clone()],
+        ] {
+            let actions = plan(&d, &o);
+            assert_eq!(actions.len(), 2);
+
+            let skip = actions
+                .iter()
+                .find(|a| matches!(a, Action::Skip { .. }))
+                .unwrap_or_else(|| panic!("expected a Skip among {actions:?}"));
+            assert!(matches!(skip, Action::Skip { reason: SkipReason::UpToDate, .. }));
+
+            let orphan = actions
+                .iter()
+                .find(|a| matches!(a, Action::DeleteOrphan(_)))
+                .unwrap_or_else(|| panic!("expected a DeleteOrphan among {actions:?}"));
+            assert!(matches!(
+                orphan,
+                Action::DeleteOrphan(p) if p == &PathBuf::from(r"C:\D\Old\TF2.lnk")
+            ));
+        }
     }
 
     #[test]

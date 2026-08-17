@@ -41,7 +41,18 @@ pub fn scan_owned(dirs: &[PathBuf]) -> Vec<OwnedShortcut> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("lnk") {
+            // Windows filesystems are case-insensitive, so a shortcut named
+            // `Game.LNK` is exactly as real a shell link as `Game.lnk`. The
+            // same `eq_ignore_ascii_case` idiom is already used for `.exe`
+            // in `icon::exe_finder`; matching case-sensitively here would
+            // make such a shortcut invisible to `scan_owned` — never
+            // claimed, so `clean` could never remove it and `sync` would
+            // create a duplicate beside it.
+            let is_lnk = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("lnk"));
+            if !is_lnk {
                 continue;
             }
             if !path.is_file() {

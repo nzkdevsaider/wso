@@ -74,6 +74,39 @@ fn scan_owned_claims_only_the_signed_shortcut_and_skips_everything_else() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Windows filesystems are case-insensitive, so a shortcut saved with an
+/// uppercase `.LNK` extension (which File Explorer will happily create, e.g.
+/// via a rename) is exactly as real a shell link as a lowercase one. If
+/// `scan_owned` matched the extension case-sensitively, this file would be
+/// invisible to it despite carrying our signature: never claimed, so
+/// `clean` could never remove it and `sync` would create a duplicate
+/// shortcut beside it.
+#[test]
+fn scan_owned_claims_a_signed_shortcut_with_an_uppercase_extension() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("uppercase_extension");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let sig = Signature { platform: Platform::Steam, id: "440".into() };
+    write_lnk(
+        &dir.join("Team Fortress 2.LNK"),
+        &LnkData {
+            target: system_exe(),
+            args: "-applaunch 440".into(),
+            working_dir: None,
+            icon: None,
+            description: encode("Team Fortress 2", &sig),
+        },
+    )
+    .unwrap();
+
+    let owned = scan_owned(&[dir.clone()]);
+    assert_eq!(owned.len(), 1, "an uppercase .LNK extension must still be claimed");
+    assert_eq!(owned[0].sig, sig);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A dry run must be genuinely inert: no file written, and — since the real
 /// path here sits inside a directory that does not exist yet — not even the
 /// parent directory may be created. Only after a real (non-dry) run does
