@@ -8,6 +8,11 @@ use std::path::{Path, PathBuf};
 pub enum ConfigError {
     Io(String),
     Serialize(String),
+    /// `save` refused to run rather than overwrite one of the accumulated
+    /// `<name>.invalid[.N]` rescue files it would otherwise have to pick
+    /// between. The `String` names the directory and file the user needs to
+    /// clean up before saving will work again.
+    TooManyRescues(String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -15,6 +20,7 @@ impl std::fmt::Display for ConfigError {
         match self {
             ConfigError::Io(d) => write!(f, "could not write config: {d}"),
             ConfigError::Serialize(d) => write!(f, "could not serialize config: {d}"),
+            ConfigError::TooManyRescues(d) => write!(f, "refusing to save: {d}"),
         }
     }
 }
@@ -116,19 +122,42 @@ pub fn load(path: &Path) -> (Config, ConfigStatus) {
     }
 }
 
-/// Builds the sibling path a corrupt `path` is renamed to before it would
-/// otherwise be silently overwritten: `config.toml` becomes
-/// `config.toml.invalid` in the same directory.
-fn invalid_sibling_path(path: &Path) -> PathBuf {
+/// The largest number of accumulated rescue files `save` will pick between
+/// before refusing to run. A plain `std::fs::rename` overwrites its
+/// destination unconditionally on Windows, so without a bound (and without
+/// checking each candidate for an existing occupant) a second corruption
+/// would silently destroy the rescue the first corruption produced — the
+/// exact file this mechanism exists to protect. Nine is generous for a file
+/// nobody is expected to corrupt more than once before noticing.
+const MAX_INVALID_SIBLINGS: u32 = 9;
+
+/// Finds the first unoccupied name in the rescue sequence `<name>.invalid`,
+/// `<name>.invalid.2`, `<name>.invalid.3`, ..., up to `MAX_INVALID_SIBLINGS`,
+/// so a corrupt `path` can be renamed aside without ever overwriting an
+/// earlier rescue. Returns `None` if every name in that range is already
+/// taken, which tells the caller to refuse rather than silently pick one.
+fn first_free_invalid_sibling(path: &Path) -> Option<PathBuf> {
     let file_name = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("config.toml");
-    let invalid_name = format!("{file_name}.invalid");
-    match path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        Some(parent) => parent.join(invalid_name),
-        None => PathBuf::from(invalid_name),
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+
+    for n in 1..=MAX_INVALID_SIBLINGS {
+        let candidate_name = if n == 1 {
+            format!("{file_name}.invalid")
+        } else {
+            format!("{file_name}.invalid.{n}")
+        };
+        let candidate = match parent {
+            Some(p) => p.join(candidate_name),
+            None => PathBuf::from(candidate_name),
+        };
+        if !candidate.exists() {
+            return Some(candidate);
+        }
     }
+    None
 }
 
 /// Writes `text` into `dest` only if the write and the following rename both
@@ -175,19 +204,53 @@ fn write_atomically(dest: &Path, text: &str) -> Result<(), ConfigError> {
 /// Saves `cfg` to `path`. Two things protect the user's data along the way:
 ///
 /// - If a file already exists at `path` and cannot be parsed as `Config`
-///   (e.g. a hand-edit typo), it is renamed aside to a `.invalid` sibling
-///   before anything is overwritten, so those bytes are never lost.
+///   (e.g. a hand-edit typo), it is renamed aside to the first free name in
+///   the `<name>.invalid[.N]` sequence before anything is overwritten, so
+///   those bytes are never lost. Renaming aside never overwrites an earlier
+///   rescue (see `first_free_invalid_sibling`); if every slot up to
+///   `MAX_INVALID_SIBLINGS` is already taken, `save` returns
+///   `ConfigError::TooManyRescues` and touches nothing rather than destroy
+///   one of the existing rescues to make room.
 /// - The new content itself is written atomically (see `write_atomically`),
 ///   so a crash mid-write can never leave `path` truncated. This has to
 ///   compose with the rename-aside step above: doing the rename without the
 ///   atomic write would mean a crash during the write leaves the user with
-///   *both* a `.invalid` file *and* a truncated `config.toml` — worse than
+///   *both* a rescue file *and* a truncated `config.toml` — worse than
 ///   before the fix.
+///
+/// Known accepted gap: between a successful rename-aside and the atomic
+/// write completing, `path` briefly does not exist at all. A crash in that
+/// exact window leaves the config `Missing` on the next `load` rather than
+/// `Corrupt`, though the original bytes are safe in the rescue file. Closing
+/// this fully would need a lock or a journal, which this tool does not
+/// warrant; it is a known property of two-step rename recovery, not an
+/// oversight.
 pub fn save(path: &Path, cfg: &Config) -> Result<(), ConfigError> {
     if let Ok(existing_text) = std::fs::read_to_string(path) {
         if toml::from_str::<Config>(&existing_text).is_err() {
-            let invalid_path = invalid_sibling_path(path);
-            std::fs::rename(path, &invalid_path).map_err(|e| ConfigError::Io(e.to_string()))?;
+            match first_free_invalid_sibling(path) {
+                Some(invalid_path) => {
+                    std::fs::rename(path, &invalid_path)
+                        .map_err(|e| ConfigError::Io(e.to_string()))?;
+                }
+                None => {
+                    let dir = path
+                        .parent()
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| ".".to_string());
+                    let file_name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("config.toml");
+                    return Err(ConfigError::TooManyRescues(format!(
+                        "{dir} already holds {MAX_INVALID_SIBLINGS} rescued copies of \
+                         {file_name} ({file_name}.invalid through \
+                         {file_name}.invalid.{MAX_INVALID_SIBLINGS}); clean them up \
+                         before saving again"
+                    )));
+                }
+            }
         }
     }
 
@@ -413,6 +476,108 @@ mod tests {
             std::fs::read_dir(&dir).unwrap().count(),
             1,
             "only the blocker file should remain; no stray temp file"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A single corruption is rescued correctly (proved above by
+    /// `saving_over_an_unparseable_file_preserves_it_as_an_invalid_sibling`),
+    /// but a plain `std::fs::rename` overwrites its destination
+    /// unconditionally on Windows. If a *second* corruption happened before
+    /// the user looked at the first rescue, renaming the new broken file
+    /// straight onto `config.toml.invalid` would destroy the very file the
+    /// mechanism exists to protect, with no sign anything went wrong. This
+    /// test corrupts the config twice in a row and asserts both rescues
+    /// survive with their own, distinct original bytes.
+    #[test]
+    fn two_consecutive_corrupt_saves_leave_both_rescues_present_with_distinct_content() {
+        let dir = scratch_dir("two_consecutive_corrupt_saves");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+
+        let first_corrupt = "first corrupt {{{";
+        std::fs::write(&path, first_corrupt).unwrap();
+        save(&path, &Config::default()).unwrap();
+
+        let second_corrupt = "second corrupt, totally different ]]]";
+        std::fs::write(&path, second_corrupt).unwrap();
+        save(&path, &Config::default()).unwrap();
+
+        let first_rescue = dir.join("config.toml.invalid");
+        let second_rescue = dir.join("config.toml.invalid.2");
+        assert_eq!(
+            std::fs::read_to_string(&first_rescue).unwrap(),
+            first_corrupt,
+            "the first rescue must survive the second corruption untouched"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&second_rescue).unwrap(),
+            second_corrupt,
+            "the second corruption must land in its own, distinct rescue file"
+        );
+
+        let (loaded, status) = load(&path);
+        assert_eq!(loaded, Config::default());
+        assert_eq!(status, ConfigStatus::Loaded);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// If every name in the rescue sequence is already occupied, `save` must
+    /// refuse rather than pick one to overwrite — overwriting any of them
+    /// would silently discard a rescue a previous corruption produced. The
+    /// destination itself (still holding the latest corrupt bytes) must be
+    /// left exactly as it was: neither renamed away nor replaced.
+    #[test]
+    fn save_refuses_when_every_rescue_slot_is_taken_and_leaves_the_destination_untouched() {
+        let dir = scratch_dir("all_rescue_slots_taken");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let corrupt_bytes = "still not toml {{{";
+        std::fs::write(&path, corrupt_bytes).unwrap();
+
+        std::fs::write(dir.join("config.toml.invalid"), "occupied").unwrap();
+        for n in 2..=MAX_INVALID_SIBLINGS {
+            std::fs::write(dir.join(format!("config.toml.invalid.{n}")), "occupied").unwrap();
+        }
+
+        let result = save(&path, &Config::default());
+        assert!(
+            matches!(result, Err(ConfigError::TooManyRescues(_))),
+            "expected TooManyRescues, got {result:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            corrupt_bytes,
+            "the destination must be untouched when save refuses"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The uncreatable-directory test above forces `save` to fail at
+    /// `create_dir_all`, before `write_atomically` is ever reached, so it
+    /// cannot exercise `write_atomically`'s own cleanup path. This test
+    /// calls `write_atomically` directly and forces its final rename to
+    /// fail — renaming a file onto an existing directory is rejected — to
+    /// prove the temp file is removed even when the failure happens after
+    /// the temp file was already written successfully.
+    #[test]
+    fn a_failed_rename_in_write_atomically_leaves_no_temp_file_behind() {
+        let dir = scratch_dir("write_atomically_rename_fails");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("config.toml");
+        // A directory occupies the destination, so the final `rename` (a
+        // file onto an existing directory) is guaranteed to fail.
+        std::fs::create_dir_all(&dest).unwrap();
+
+        let result = write_atomically(&dest, "unused");
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "only the `dest` directory itself should remain; no leftover temp file"
         );
 
         std::fs::remove_dir_all(&dir).ok();
