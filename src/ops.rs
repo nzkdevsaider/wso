@@ -77,6 +77,75 @@ pub fn scan_owned(dirs: &[PathBuf]) -> Vec<OwnedShortcut> {
     out
 }
 
+/// Every directory under `base` that could be holding a shortcut this tool
+/// created: `base` itself, each of its immediate subdirectories, and — inside
+/// each of those — the per-platform folders this tool names.
+///
+/// Derived from the filesystem, deliberately, rather than from the
+/// configuration. The first attempt at fixing the mode-switch defect built
+/// this list from the configured layout plus the literal default `"Games"`,
+/// and it only ever worked for a folder actually called `Games`.
+/// `Cli::apply_overrides` replaces `cfg.organization` wholesale when
+/// `--organize flat` is passed, so a user switching away from a folder named
+/// `Mis Juegos` leaves nothing behind that names it: by the time anything
+/// looks at the configuration, the old folder name is simply gone. Remembering
+/// names structurally cannot solve this. Looking at what is on disk can, and
+/// it also covers a folder whose config entry was hand-edited, corrupted, or
+/// lost.
+///
+/// Bounded rather than recursive. The three shapes below are exactly the ones
+/// `layout::shortcut_dir` can produce, so nothing deeper needs visiting:
+///
+/// - `base` — the flat layout.
+/// - `base\<anything>` — a unified folder, under any name the user ever chose.
+/// - `base\<anything>\Steam`, `base\<anything>\Epic` — the per-platform
+///   layout nested under a parent, which is the only layout that sits two
+///   levels down. The second level is restricted to the platform names this
+///   tool writes, so the cost stays one `read_dir` of `base` plus a couple of
+///   directory checks per subdirectory, rather than a walk of the user's
+///   entire Desktop or Start Menu.
+///
+/// Widening the scan is safe by construction, and this is the same argument
+/// `clean` has always relied on: `scan_owned` claims a file only if it
+/// carries the `[wso:...]` signature, regardless of which directory it sits
+/// in, and every deletion and every overwrite is gated on that claim
+/// (`shortcut::collision`). A directory this tool has no business in simply
+/// yields nothing.
+///
+/// This lives here, in the I/O layer, and not in `layout`: it reads the
+/// filesystem, and `layout` is pure.
+pub fn scan_dirs(base: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![base.to_path_buf()];
+
+    let Ok(entries) = std::fs::read_dir(base) else {
+        // An unreadable or missing base is not an error here: `scan_owned`
+        // skips a directory it cannot read, and the caller still gets `base`
+        // itself, which is the flat layout.
+        return dirs;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // `is_dir` rather than `file_type`, so a junction or symlink pointing
+        // at a real folder is followed. There is no recursion here, so there
+        // is no cycle to fall into.
+        if !path.is_dir() {
+            continue;
+        }
+        if !dirs.contains(&path) {
+            dirs.push(path.clone());
+        }
+        for platform in layout::all_platforms() {
+            let nested = path.join(layout::sanitize_filename(platform.display_name()));
+            if nested.is_dir() && !dirs.contains(&nested) {
+                dirs.push(nested);
+            }
+        }
+    }
+
+    dirs
+}
+
 /// Turns detected games into the shortcuts that should exist, honoring
 /// platform selection, exclusions, icon overrides and the chosen
 /// organization.
@@ -352,6 +421,140 @@ mod tests {
                 r"C:\Windows\explorer.exe",
             ))],
         }
+    }
+
+    /// Gives each test its own scratch directory under the OS temp dir,
+    /// unique across concurrent `cargo test` processes and across parallel
+    /// threads within one, so two tests can never collide on a fixed name.
+    fn scratch_dir(label: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        let pid = std::process::id();
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("wso_scan_dirs_{label}_{pid}_{n}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The whole reason this reads the disk instead of the configuration:
+    /// the folder names below are arbitrary, and by the time `sync` runs with
+    /// `--organize flat` there is nothing in the configuration that names
+    /// either of them. A name-derived scan finds neither; this one finds both
+    /// without knowing anything about them.
+    ///
+    /// Deliberately no folder called `Games` anywhere in this test. That name
+    /// was the fallback the previous, name-derived implementation carried,
+    /// and including it here would let a regression to that implementation
+    /// pass.
+    #[test]
+    fn subdirectories_are_found_under_any_name() {
+        let base = scratch_dir("any_name");
+        std::fs::create_dir_all(base.join("Mis Juegos")).unwrap();
+        std::fs::create_dir_all(base.join("Zzz Unrelated")).unwrap();
+
+        let dirs = scan_dirs(&base);
+        assert!(dirs.contains(&base), "the flat layout is the base itself");
+        assert!(dirs.contains(&base.join("Mis Juegos")), "{dirs:?}");
+        assert!(dirs.contains(&base.join("Zzz Unrelated")), "{dirs:?}");
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// `PerPlatform { parent: Some(name) }` writes into `base\<name>\Steam`,
+    /// one level deeper than every other layout. A scan bounded at "base plus
+    /// its immediate subdirectories" reaches `base\<name>` and stops one
+    /// directory short of the shortcut, so this second level is not optional.
+    #[test]
+    fn platform_folders_nested_under_a_subdirectory_are_found() {
+        let base = scratch_dir("nested_platform");
+        std::fs::create_dir_all(base.join("Mis Juegos").join("Steam")).unwrap();
+        std::fs::create_dir_all(base.join("Mis Juegos").join("Epic")).unwrap();
+
+        let dirs = scan_dirs(&base);
+        for platform in layout::all_platforms() {
+            let expected = base.join("Mis Juegos").join(platform.display_name());
+            assert!(
+                dirs.contains(&expected),
+                "expected {expected:?} in {dirs:?}"
+            );
+        }
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// The bound, which is what keeps this from becoming a walk of the user's
+    /// entire Desktop. The second level is restricted to the platform folder
+    /// names this tool writes, and there is no third level at all — `Steam`
+    /// nested inside `Steam` is past anything `layout::shortcut_dir` can
+    /// produce.
+    ///
+    /// Without the restriction, `Notes` would be listed; without the depth
+    /// bound, so would the directory below `Steam`.
+    #[test]
+    fn the_scan_stops_where_this_tool_stops_writing() {
+        let base = scratch_dir("bounded");
+        std::fs::create_dir_all(base.join("Mis Juegos").join("Notes")).unwrap();
+        std::fs::create_dir_all(base.join("Mis Juegos").join("Steam").join("Steam")).unwrap();
+
+        let dirs = scan_dirs(&base);
+        assert!(dirs.contains(&base.join("Mis Juegos").join("Steam")));
+        assert!(
+            !dirs.contains(&base.join("Mis Juegos").join("Notes")),
+            "a second-level folder that is not a platform name must not be scanned: {dirs:?}"
+        );
+        assert!(
+            !dirs.contains(&base.join("Mis Juegos").join("Steam").join("Steam")),
+            "there is no third level to scan: {dirs:?}"
+        );
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// Files are not directories. A `.lnk` sitting in the base — which is
+    /// exactly what a flat layout looks like — must not be handed to
+    /// `scan_owned` as a directory to read.
+    #[test]
+    fn files_are_not_listed_as_directories() {
+        let base = scratch_dir("files_ignored");
+        std::fs::write(base.join("Terraria.lnk"), b"x").unwrap();
+
+        let dirs = scan_dirs(&base);
+        assert_eq!(dirs, vec![base.clone()], "{dirs:?}");
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// Reading the same directory twice would let one shortcut be claimed
+    /// twice and reconciled against itself. A subdirectory that happens to be
+    /// named after a platform is reachable both as an immediate child and, in
+    /// principle, as a nested platform folder, so this is not hypothetical.
+    #[test]
+    fn no_directory_is_listed_twice() {
+        let base = scratch_dir("no_duplicates");
+        std::fs::create_dir_all(base.join("Steam").join("Steam")).unwrap();
+        std::fs::create_dir_all(base.join("Epic")).unwrap();
+
+        let dirs = scan_dirs(&base);
+        let mut unique = dirs.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), dirs.len(), "duplicates in {dirs:?}");
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// A base that does not exist is not an error: `scan_owned` skips a
+    /// directory it cannot read, and the caller must still get the base back
+    /// so the flat layout is represented rather than the list coming back
+    /// empty.
+    #[test]
+    fn an_unreadable_base_still_yields_the_base_itself() {
+        let base = scratch_dir("missing_base");
+        std::fs::remove_dir_all(&base).unwrap();
+
+        assert_eq!(scan_dirs(&base), vec![base]);
     }
 
     /// Steam can leave a stale `appmanifest_<appid>.acf` behind in an old

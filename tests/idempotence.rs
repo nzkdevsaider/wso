@@ -26,7 +26,7 @@ mod common;
 
 use std::path::PathBuf;
 use winshortcuts_organizer::config::Config;
-use winshortcuts_organizer::layout::{self, Organization};
+use winshortcuts_organizer::layout::Organization;
 use winshortcuts_organizer::ops;
 use winshortcuts_organizer::plan::{plan, Action};
 use winshortcuts_organizer::platform::{Game, IconCandidate, Launch, Platform};
@@ -115,7 +115,7 @@ fn a_shortcut_written_and_read_back_needs_no_further_change() {
     assert_eq!(summary.created, 2);
 
     for stage in ["first re-plan", "second re-plan"] {
-        let owned = ops::scan_owned(&layout::scan_dirs(&base, &cfg.organization));
+        let owned = ops::scan_owned(&ops::scan_dirs(&base));
         assert_eq!(
             owned.len(),
             2,
@@ -176,7 +176,7 @@ fn a_target_supplied_in_a_different_spelling_still_reconciles_as_up_to_date() {
         "the respelled path must actually differ as a string, or this test proves nothing"
     );
 
-    let owned = ops::scan_owned(&layout::scan_dirs(&base, &cfg.organization));
+    let owned = ops::scan_owned(&ops::scan_dirs(&base));
     let desired = ops::build_desired(&[game], &cfg, &base, &cache);
     assert_all_skip(&plan(&desired, &owned), "respelled target");
 

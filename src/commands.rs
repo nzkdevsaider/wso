@@ -368,7 +368,7 @@ fn sync_target(
 ) -> (ops::Summary, Applied) {
     let cache = config::cache_dir();
 
-    let owned = ops::scan_owned(&layout::scan_dirs(base, &cfg.organization));
+    let owned = ops::scan_owned(&ops::scan_dirs(base));
     let desired = ops::build_desired(games, cfg, base, &cache);
     let actions = plan(&desired, &owned);
 
@@ -411,24 +411,28 @@ pub fn sync(cli: &Cli) -> i32 {
 }
 
 /// Every directory `clean` scans: both known-folder bases (Desktop and the
-/// per-user Start Menu — `clean` is not limited to whichever targets happen
+/// per-user Start Menu - `clean` is not limited to whichever targets happen
 /// to be configured right now, since the whole point is to find shortcuts
-/// left behind by a *previous* configuration), crossed with every
-/// directory `layout::scan_dirs` names under each of them. `scan_dirs`
-/// already de-duplicates within one base; the extra check below covers the
-/// cross-base case, so `scan_owned` never reads the same directory twice
-/// however the two known folders are configured. A base that cannot be
-/// resolved is returned separately
-/// rather than silently dropped — `clean` must tell the user it did not
-/// scan everywhere it promised to, not print a clean summary that quietly
-/// covered only part of the disk.
-fn clean_scan_dirs(cfg: &config::Config) -> (Vec<PathBuf>, Vec<UnresolvedTarget>) {
+/// left behind by a *previous* configuration), each expanded by
+/// `ops::scan_dirs` into the directories a shortcut could actually be sitting
+/// in. `ops::scan_dirs` already de-duplicates within one base; the extra
+/// check below covers the cross-base case, so `scan_owned` never reads the
+/// same directory twice however the two known folders are configured. A base
+/// that cannot be resolved is returned separately rather than silently
+/// dropped - `clean` must tell the user it did not scan everywhere it
+/// promised to, not print a clean summary that quietly covered only part of
+/// the disk.
+///
+/// Takes no configuration at all any more, which is the point: what `clean`
+/// looks at is decided by what is on disk, not by what the config file
+/// happens to still remember.
+fn clean_scan_dirs() -> (Vec<PathBuf>, Vec<UnresolvedTarget>) {
     let (resolved, unresolved) =
         resolve_bases([Target::Desktop, Target::StartMenu], layout::target_dir);
 
     let mut dirs = Vec::new();
     for (_, base) in &resolved {
-        for d in layout::scan_dirs(base, &cfg.organization) {
+        for d in ops::scan_dirs(base) {
             if !dirs.contains(&d) {
                 dirs.push(d);
             }
@@ -446,10 +450,13 @@ pub fn clean(cli: &Cli) -> i32 {
     );
     println!("Shortcuts you made yourself, or that came from anywhere else, are never touched.");
 
+    // Loaded purely so a corrupt config file is still reported; `clean`
+    // itself takes nothing from it, because where it looks is decided by
+    // what is on disk.
     let path = config::config_path();
-    let cfg = load_config_with_warning(&path);
+    let _ = load_config_with_warning(&path);
 
-    let (dirs, unresolved) = clean_scan_dirs(&cfg);
+    let (dirs, unresolved) = clean_scan_dirs();
     let mut failed = warn_unresolved(&unresolved, "scanned");
 
     let owned = ops::scan_owned(&dirs);
@@ -477,7 +484,7 @@ pub fn status(cli: &Cli) -> i32 {
 
     let cache = config::cache_dir();
     for (target, base) in resolved {
-        let owned = ops::scan_owned(&layout::scan_dirs(&base, &cfg.organization));
+        let owned = ops::scan_owned(&ops::scan_dirs(&base));
         let desired = ops::build_desired(&games, &cfg, &base, &cache);
         let actions = plan(&desired, &owned);
         let pending = actions
