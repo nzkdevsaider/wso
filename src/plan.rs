@@ -23,11 +23,22 @@ pub struct OwnedShortcut {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
     UpToDate,
+    /// A later `desired` entry shares a signature with an earlier one
+    /// already reconciled in this same `plan()` call. Only the first entry
+    /// for a signature acts; every later one is skipped so it cannot also
+    /// act on whatever owned shortcut (or lack of one) the first entry
+    /// already claimed — e.g. Steam can leave a stale `appmanifest_*.acf`
+    /// behind in an old library after a game moves drives, producing two
+    /// `Game` entries with the same appid upstream.
+    DuplicateSignature,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Create(DesiredShortcut),
+    /// Rewrites the shortcut in place at its current path: the launch
+    /// command, working directory, or description changed, but not the
+    /// path itself (an icon-only change is a `FixIcon` instead).
     Retarget { path: PathBuf, lnk: LnkData },
     FixIcon { path: PathBuf, lnk: LnkData },
     Move { from: PathBuf, to: PathBuf, lnk: LnkData },
@@ -39,11 +50,27 @@ pub enum Action {
 ///
 /// Matching is by signature, never by path or filename, so a shortcut the
 /// user renamed or moved is still recognized as the same game.
+///
+/// If two `desired` entries share a signature — which can happen upstream,
+/// e.g. a stale Steam library manifest producing a duplicate `Game` — only
+/// the first is reconciled; every later one is skipped with
+/// `SkipReason::DuplicateSignature` rather than also acting on whatever the
+/// first entry already claimed.
 pub fn plan(desired: &[DesiredShortcut], owned: &[OwnedShortcut]) -> Vec<Action> {
     let mut actions = Vec::new();
     let mut matched: Vec<bool> = vec![false; owned.len()];
+    let mut claimed_signatures: Vec<&Signature> = Vec::new();
 
     for d in desired {
+        if claimed_signatures.iter().any(|s| **s == d.sig) {
+            actions.push(Action::Skip {
+                path: d.path.clone(),
+                reason: SkipReason::DuplicateSignature,
+            });
+            continue;
+        }
+        claimed_signatures.push(&d.sig);
+
         let existing = owned.iter().position(|o| o.sig == d.sig);
 
         let Some(idx) = existing else {
@@ -54,7 +81,8 @@ pub fn plan(desired: &[DesiredShortcut], owned: &[OwnedShortcut]) -> Vec<Action>
         let o = &owned[idx];
 
         // A relocation rewrites the file at the new path, so it subsumes any
-        // target or icon change and must be checked first.
+        // launch-command, description, or icon change and must be checked
+        // first.
         if o.path != d.path {
             actions.push(Action::Move {
                 from: o.path.clone(),
@@ -64,7 +92,17 @@ pub fn plan(desired: &[DesiredShortcut], owned: &[OwnedShortcut]) -> Vec<Action>
         } else if o.lnk.target != d.lnk.target
             || o.lnk.args != d.lnk.args
             || o.lnk.working_dir != d.lnk.working_dir
+            || o.lnk.description != d.lnk.description
         {
+            // `description` is grouped with the launch-command fields, not
+            // with the icon: both sides are produced by the same
+            // deterministic `signature::encode`, so it changes exactly when
+            // the underlying game title changes — and `sanitize_filename`
+            // is many-to-one (e.g. "Trailmakers." and "Trailmakers" both
+            // sanitize to "Trailmakers"), so a title change is not
+            // guaranteed to also change `path` and trigger a `Move`.
+            // Without this, such a title change would be invisible here and
+            // the shortcut's tooltip would never refresh.
             actions.push(Action::Retarget { path: d.path.clone(), lnk: d.lnk.clone() });
         } else if o.lnk.icon != d.lnk.icon {
             actions.push(Action::FixIcon { path: d.path.clone(), lnk: d.lnk.clone() });
@@ -103,6 +141,10 @@ mod tests {
             icon: Some((PathBuf::from(icon), 0)),
             description: "d".into(),
         }
+    }
+
+    fn lnk_with_description(target: &str, args: &str, icon: &str, description: &str) -> LnkData {
+        LnkData { description: description.into(), ..lnk(target, args, icon) }
     }
 
     fn desired(id: &str, path: &str, icon: &str) -> DesiredShortcut {
@@ -336,5 +378,65 @@ mod tests {
             &actions[1],
             Action::DeleteOrphan(p) if p == &PathBuf::from(r"C:\D\TF2 - Copy.lnk")
         ));
+    }
+
+    #[test]
+    fn a_duplicate_desired_signature_only_acts_once_and_flags_the_rest() {
+        // Two desired entries sharing a signature is reachable in practice:
+        // Steam can leave a stale appmanifest behind in an old library
+        // after a game moves to another drive, producing two `Game`
+        // entries with the same appid upstream. Without deduplication
+        // here, both would resolve to the same owned index and both would
+        // act on it — producing two Move actions with the same `from`,
+        // the second acting on a file the first already relocated. Only
+        // the first desired entry for a signature may act; the rest must
+        // be skipped with a reason that names the cause, not silently
+        // dropped and not silently duplicated.
+        let d = [
+            desired("440", r"C:\D\Games\TF2.lnk", "tf2.exe"),
+            desired("440", r"C:\D\Games\TF2 Again.lnk", "tf2.exe"),
+        ];
+        let o = [owned("440", r"C:\D\TF2.lnk", "tf2.exe")];
+        let actions = plan(&d, &o);
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], Action::Move { .. }));
+        match &actions[1] {
+            Action::Skip { path, reason: SkipReason::DuplicateSignature } => {
+                assert_eq!(path, &PathBuf::from(r"C:\D\Games\TF2 Again.lnk"));
+            }
+            other => panic!("expected a duplicate-signature Skip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_retarget_is_emitted_when_only_the_description_changed() {
+        // sanitize_filename (src/layout.rs) is many-to-one: "Trailmakers."
+        // and "Trailmakers" both sanitize to "Trailmakers". So a title
+        // change confined to punctuation stripped by sanitization leaves
+        // `path` identical while `description` (produced by
+        // `signature::encode` from the title) differs. Comparing only
+        // target/args/working_dir would wrongly report `Skip` here and the
+        // shortcut's tooltip would never refresh.
+        let d = [DesiredShortcut {
+            sig: sig("440"),
+            path: PathBuf::from(r"C:\D\TF2.lnk"),
+            lnk: lnk_with_description(
+                "steam.exe",
+                "-applaunch 440",
+                "tf2.exe",
+                "Team Fortress 2 [wso:steam:440]",
+            ),
+        }];
+        let o = [OwnedShortcut {
+            sig: sig("440"),
+            path: PathBuf::from(r"C:\D\TF2.lnk"),
+            lnk: lnk_with_description(
+                "steam.exe",
+                "-applaunch 440",
+                "tf2.exe",
+                "Team Fortress 2. [wso:steam:440]",
+            ),
+        }];
+        assert!(matches!(plan(&d, &o).as_slice(), [Action::Retarget { .. }]));
     }
 }
