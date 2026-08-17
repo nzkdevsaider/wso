@@ -1,10 +1,19 @@
 //! The four command entry points `main` dispatches to. This is the layer
 //! that turns the pure reasoning in `plan` and `ops` into console output and
 //! (subject to confirmation) real filesystem changes.
+//!
+//! Exit codes are deliberately narrow: `0` means every item succeeded, `1`
+//! means some item failed (a platform that could not be read, a target
+//! folder that could not be resolved, a shortcut that could not be
+//! written), and `2` is reserved for the tool provably being unable to act
+//! at all — which, in this program, happens before any command in this
+//! module runs at all (`ComGuard::new()` failing in `main`). None of the
+//! functions below ever return `2`: a partial problem is always a `1`, not
+//! an excuse to abandon everything else that might still succeed.
 
 use crate::cli::Cli;
 use crate::config::{self, ConfigStatus};
-use crate::layout::{self, Organization, Target};
+use crate::layout::{self, LayoutError, Organization, Target};
 use crate::ops;
 use crate::plan::{plan, Action};
 use crate::platform::{epic::EpicProvider, steam::SteamProvider, Game, GameProvider, Platform};
@@ -38,43 +47,142 @@ fn load_config_with_warning(path: &Path) -> config::Config {
     cfg
 }
 
-/// Detects installed platforms and lists their games.
-///
-/// A platform the user has not installed is informational, not an error —
-/// most users have only one of Steam or Epic, so this is the common case,
-/// not an edge case. A platform that *is* installed but whose data could
-/// not be read (a corrupt or unreadable `libraryfolders.vdf`, a manifest
-/// directory that vanished mid-scan, ...) is different: the resulting game
-/// list would be silently incomplete, and `clean`'s sibling command,
-/// `sync`, could then delete shortcuts for games that are actually still
-/// installed simply because this scan failed to see them. That is exactly
-/// the "unreadable Steam installation" the global exit-code contract calls
-/// out as a code-2 failure, so it is surfaced as `Err` here rather than as
-/// another note, and the caller must abort the whole run rather than
-/// proceed on partial data.
-fn collect_games(cfg: &config::Config) -> Result<(Vec<Game>, Vec<String>), String> {
+/// What came of trying to detect and list one platform's games: `None` when
+/// the platform was never installed at all, `Some(Ok(games))` when it was
+/// installed and read successfully, `Some(Err(detail))` when it was
+/// installed but its data could not be read.
+type PlatformOutcome = Option<Result<Vec<Game>, String>>;
+
+/// Every game found across every selected platform, plus the messages
+/// worth showing the user split by severity.
+struct Detection {
+    games: Vec<Game>,
+    /// A platform simply was not installed. The common case — most users
+    /// have only one of Steam or Epic — so this is informational, not a
+    /// problem.
+    infos: Vec<String>,
+    /// A platform *was* detected as installed but its data could not be
+    /// read (a corrupt or unreadable `libraryfolders.vdf`, a manifest
+    /// directory that vanished mid-scan, ...). This used to be treated as
+    /// a fatal, whole-run error, which was wrong in a very concrete way:
+    /// `collect_games` reads Steam before Epic, so a user with a healthy
+    /// Steam library and only a broken Epic install would have their Steam
+    /// games detected, then thrown away, then be told the run failed
+    /// globally — doing real work and discarding it to report a failure
+    /// that was never global to begin with. It is now folded in here as a
+    /// per-platform failed item instead: the other platform's games are
+    /// still collected and acted on, and this only ever contributes to
+    /// exit code `1`.
+    failures: Vec<String>,
+}
+
+/// Folds one platform's detection `outcome` into the running `games`,
+/// `infos` and `failures` lists. Pulled out of `collect_games` specifically
+/// so this — the actual "not installed is fine, unreadable is a failed
+/// item, not an abort" decision — is unit-testable without needing a real
+/// Steam or Epic installation, let alone a broken one.
+fn record_platform(
+    outcome: PlatformOutcome,
+    not_installed_note: &str,
+    unreadable_prefix: &str,
+    games: &mut Vec<Game>,
+    infos: &mut Vec<String>,
+    failures: &mut Vec<String>,
+) {
+    match outcome {
+        None => infos.push(not_installed_note.to_string()),
+        Some(Ok(mut g)) => games.append(&mut g),
+        Some(Err(detail)) => failures.push(format!("{unreadable_prefix}: {detail}")),
+    }
+}
+
+/// Detects installed platforms and lists their games. See `Detection` for
+/// how "not installed" and "installed but unreadable" are told apart.
+fn collect_games(cfg: &config::Config) -> Detection {
     let mut games = Vec::new();
-    let mut notes = Vec::new();
+    let mut infos = Vec::new();
+    let mut failures = Vec::new();
 
     if cfg.platforms.contains(&Platform::Steam) {
-        match SteamProvider::detect() {
-            None => notes.push("Steam is not installed; skipping.".to_string()),
-            Some(p) => match p.games() {
-                Ok(mut g) => games.append(&mut g),
-                Err(e) => return Err(format!("Steam is installed but could not be read: {e}")),
-            },
-        }
+        let outcome = SteamProvider::detect().map(|p| p.games().map_err(|e| e.to_string()));
+        record_platform(
+            outcome,
+            "Steam is not installed; skipping.",
+            "Steam is installed but could not be read",
+            &mut games,
+            &mut infos,
+            &mut failures,
+        );
     }
     if cfg.platforms.contains(&Platform::Epic) {
-        match EpicProvider::detect() {
-            None => notes.push("Epic Games Launcher is not installed; skipping.".to_string()),
-            Some(p) => match p.games() {
-                Ok(mut g) => games.append(&mut g),
-                Err(e) => return Err(format!("Epic is installed but could not be read: {e}")),
-            },
+        let outcome = EpicProvider::detect().map(|p| p.games().map_err(|e| e.to_string()));
+        record_platform(
+            outcome,
+            "Epic Games Launcher is not installed; skipping.",
+            "Epic is installed but could not be read",
+            &mut games,
+            &mut infos,
+            &mut failures,
+        );
+    }
+
+    Detection { games, infos, failures }
+}
+
+/// Prints `detection`'s notes (informational to stdout, failures as
+/// warnings to stderr) and the game count, returning the games and the
+/// number of platform-level failures so the caller can fold it into its own
+/// exit-code accounting.
+fn report_detection(detection: Detection) -> (Vec<Game>, usize) {
+    for n in &detection.infos {
+        println!("{n}");
+    }
+    for f in &detection.failures {
+        eprintln!("Warning: {f}");
+    }
+    println!("{} game(s) detected.", detection.games.len());
+    (detection.games, detection.failures.len())
+}
+
+/// Splits `targets` into the bases that `resolve` could locate and the ones
+/// it could not, pairing each unresolved target with what went wrong.
+///
+/// Generic over `resolve` (in production, always `layout::target_dir`)
+/// specifically so the behavior this function embodies — an unresolved
+/// target is named and kept, never silently dropped — is unit-testable: the
+/// real `layout::target_dir` only fails via a live Windows known-folder
+/// lookup, which this test suite has no way to force, so a test substitutes
+/// a resolver that fails deterministically instead.
+fn resolve_bases<F>(
+    targets: impl IntoIterator<Item = Target>,
+    resolve: F,
+) -> (Vec<(Target, PathBuf)>, Vec<(Target, String)>)
+where
+    F: Fn(Target) -> Result<PathBuf, LayoutError>,
+{
+    let mut resolved = Vec::new();
+    let mut unresolved = Vec::new();
+    for target in targets {
+        match resolve(target) {
+            Ok(base) => resolved.push((target, base)),
+            Err(e) => unresolved.push((target, e.to_string())),
         }
     }
-    Ok((games, notes))
+    (resolved, unresolved)
+}
+
+/// Prints a warning naming each unresolved target and why, and returns how
+/// many there were — every caller folds this straight into its own failed
+/// count, since a target this tool could not even look at is a partial
+/// failure, not something to pass over in silence.
+fn warn_unresolved(unresolved: &[(Target, String)], action: &str) -> usize {
+    for (target, detail) in unresolved {
+        eprintln!(
+            "Warning: could not resolve the {} folder; it was not {action} ({detail}).",
+            target.label()
+        );
+    }
+    unresolved.len()
 }
 
 fn describe(actions: &[Action]) {
@@ -102,11 +210,32 @@ fn confirm(prompt: &str, assume_yes: bool) -> bool {
         .unwrap_or(false)
 }
 
+/// `0` when nothing failed, `1` otherwise. This function is the only place
+/// that decides between the two — it deliberately has no path to `2`; see
+/// the module doc comment for where that code comes from instead.
 fn exit_code(failed: usize) -> i32 {
     if failed > 0 {
         1
     } else {
         0
+    }
+}
+
+/// The exact wording `print_summary` prints, pulled into its own function
+/// so the dry-run-vs-real wording choice is unit-testable without capturing
+/// stdout.
+fn summary_line(s: &ops::Summary, dry_run: bool) -> String {
+    if dry_run {
+        format!(
+            "  {} would be created, {} would be updated, {} would be moved, \
+             {} would be deleted, {} unchanged, {} failed",
+            s.created, s.updated, s.moved, s.deleted, s.skipped, s.failed
+        )
+    } else {
+        format!(
+            "  {} created, {} updated, {} moved, {} deleted, {} unchanged, {} failed",
+            s.created, s.updated, s.moved, s.deleted, s.skipped, s.failed
+        )
     }
 }
 
@@ -117,18 +246,7 @@ fn exit_code(failed: usize) -> i32 {
 /// "9 created" after a `--dry-run` would flatly contradict the tool's own
 /// promise, in its `--help` text, that a dry run never modifies a shortcut.
 fn print_summary(s: &ops::Summary, dry_run: bool) {
-    if dry_run {
-        println!(
-            "  {} would be created, {} would be updated, {} would be moved, \
-             {} would be deleted, {} unchanged, {} failed",
-            s.created, s.updated, s.moved, s.deleted, s.skipped, s.failed
-        );
-    } else {
-        println!(
-            "  {} created, {} updated, {} moved, {} deleted, {} unchanged, {} failed",
-            s.created, s.updated, s.moved, s.deleted, s.skipped, s.failed
-        );
-    }
+    println!("{}", summary_line(s, dry_run));
 }
 
 /// Prints the pending actions, asks for confirmation unless `assume_yes` or
@@ -168,22 +286,23 @@ fn apply_with_confirmation(
 }
 
 /// Reconciles and (subject to confirmation) applies changes for one sync
-/// target under the configured organization.
+/// target under the configured organization. `base` is already resolved by
+/// the caller (see `resolve_bases`), so this never fails.
 fn sync_target(
     cfg: &config::Config,
     games: &[Game],
+    base: &Path,
     target: Target,
     dry_run: bool,
     assume_yes: bool,
-) -> Result<ops::Summary, String> {
-    let base = layout::target_dir(target).map_err(|e| e.to_string())?;
+) -> ops::Summary {
     let cache = config::cache_dir();
 
-    let owned = ops::scan_owned(&ops::managed_dirs(&base, &cfg.organization));
-    let desired = ops::build_desired(games, cfg, &base, &cache);
+    let owned = ops::scan_owned(&ops::managed_dirs(base, &cfg.organization));
+    let desired = ops::build_desired(games, cfg, base, &cache);
     let actions = plan(&desired, &owned);
 
-    Ok(apply_with_confirmation(target.label(), &actions, dry_run, assume_yes))
+    apply_with_confirmation(target.label(), &actions, dry_run, assume_yes)
 }
 
 pub fn sync(cli: &Cli) -> i32 {
@@ -198,30 +317,16 @@ pub fn sync(cli: &Cli) -> i32 {
     }
     cli.apply_overrides(&mut cfg);
 
-    let (games, notes) = match collect_games(&cfg) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            return 2;
-        }
-    };
-    for n in &notes {
-        println!("{n}");
-    }
-    println!("{} game(s) detected.", games.len());
+    let (games, platform_failures) = report_detection(collect_games(&cfg));
+    let mut failed = platform_failures;
 
-    let mut failed = 0;
-    for target in cfg.targets.iter().copied() {
-        match sync_target(&cfg, &games, target, cli.dry_run, cli.yes) {
-            Ok(s) => {
-                print_summary(&s, cli.dry_run);
-                failed += s.failed;
-            }
-            Err(e) => {
-                eprintln!("Error: {e}");
-                return 2;
-            }
-        }
+    let (resolved, unresolved) = resolve_bases(cfg.targets.iter().copied(), layout::target_dir);
+    failed += warn_unresolved(&unresolved, "synced");
+
+    for (target, base) in resolved {
+        let s = sync_target(&cfg, &games, &base, target, cli.dry_run, cli.yes);
+        print_summary(&s, cli.dry_run);
+        failed += s.failed;
     }
 
     // Never on a dry run (the user asked what would happen, not to be
@@ -277,25 +382,26 @@ fn candidate_organizations(cfg: &config::Config) -> Vec<Organization> {
 /// to be configured right now, since the whole point is to find shortcuts
 /// left behind by a *previous* configuration), crossed with every
 /// organization layout in `candidate_organizations`. Duplicate directories
-/// (e.g. `PerPlatform { parent: None }` and `PerPlatform { parent: Some("Games") }`
-/// sharing a `Steam` subfolder only when "Games" also happens to be a
-/// platform display name, which it never is) are still de-duplicated
-/// defensively so `scan_owned` never reads the same directory twice.
-fn clean_scan_dirs(cfg: &config::Config) -> Vec<PathBuf> {
+/// are still de-duplicated defensively so `scan_owned` never reads the same
+/// directory twice. A base that cannot be resolved is returned separately
+/// rather than silently dropped — `clean` must tell the user it did not
+/// scan everywhere it promised to, not print a clean summary that quietly
+/// covered only part of the disk.
+fn clean_scan_dirs(cfg: &config::Config) -> (Vec<PathBuf>, Vec<(Target, String)>) {
+    let (resolved, unresolved) =
+        resolve_bases([Target::Desktop, Target::StartMenu], layout::target_dir);
+
     let mut dirs = Vec::new();
-    for target in [Target::Desktop, Target::StartMenu] {
-        let Ok(base) = layout::target_dir(target) else {
-            continue;
-        };
+    for (_, base) in &resolved {
         for org in candidate_organizations(cfg) {
-            for d in layout::managed_dirs(&base, &org) {
+            for d in layout::managed_dirs(base, &org) {
                 if !dirs.contains(&d) {
                     dirs.push(d);
                 }
             }
         }
     }
-    dirs
+    (dirs, unresolved)
 }
 
 pub fn clean(cli: &Cli) -> i32 {
@@ -310,13 +416,16 @@ pub fn clean(cli: &Cli) -> i32 {
     let path = config::config_path();
     let cfg = load_config_with_warning(&path);
 
-    let dirs = clean_scan_dirs(&cfg);
+    let (dirs, unresolved) = clean_scan_dirs(&cfg);
+    let mut failed = warn_unresolved(&unresolved, "scanned");
+
     let owned = ops::scan_owned(&dirs);
     let actions = plan(&[], &owned);
 
     let summary = apply_with_confirmation("Every managed layout", &actions, cli.dry_run, cli.yes);
     print_summary(&summary, cli.dry_run);
-    exit_code(summary.failed)
+    failed += summary.failed;
+    exit_code(failed)
 }
 
 pub fn status(cli: &Cli) -> i32 {
@@ -324,23 +433,14 @@ pub fn status(cli: &Cli) -> i32 {
     let mut cfg = load_config_with_warning(&path);
     cli.apply_overrides(&mut cfg);
 
-    let (games, notes) = match collect_games(&cfg) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            return 2;
-        }
-    };
-    for n in &notes {
-        println!("{n}");
-    }
-    println!("{} game(s) detected.", games.len());
+    let (games, platform_failures) = report_detection(collect_games(&cfg));
+    let mut failed = platform_failures;
+
+    let (resolved, unresolved) = resolve_bases(cfg.targets.iter().copied(), layout::target_dir);
+    failed += warn_unresolved(&unresolved, "checked");
 
     let cache = config::cache_dir();
-    for target in &cfg.targets {
-        let Ok(base) = layout::target_dir(*target) else {
-            continue;
-        };
+    for (target, base) in resolved {
         let owned = ops::scan_owned(&ops::managed_dirs(&base, &cfg.organization));
         let desired = ops::build_desired(&games, &cfg, &base, &cache);
         let actions = plan(&desired, &owned);
@@ -353,7 +453,7 @@ pub fn status(cli: &Cli) -> i32 {
         );
         describe(&actions);
     }
-    0
+    exit_code(failed)
 }
 
 pub fn migrate(_cli: &Cli) -> i32 {
@@ -364,6 +464,26 @@ pub fn migrate(_cli: &Cli) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::{IconCandidate, Launch};
+
+    fn test_game(id: &str, name: &str) -> Game {
+        Game {
+            platform: Platform::Steam,
+            id: id.into(),
+            name: name.into(),
+            install_dir: PathBuf::from(r"C:\Games\Game"),
+            launch: Launch {
+                program: PathBuf::from(r"C:\Games\steam.exe"),
+                args: format!("-applaunch {id}"),
+                working_dir: None,
+            },
+            icon_candidates: vec![IconCandidate::Fallback(PathBuf::from(
+                r"C:\Windows\explorer.exe",
+            ))],
+        }
+    }
+
+    // --- candidate_organizations (correction 1) ---
 
     /// `candidate_organizations` must include the layout the user is
     /// currently configured to use — otherwise a plain `clean` run right
@@ -432,5 +552,162 @@ mod tests {
             games_unified_count, 1,
             "expected exactly one Unified(\"Games\") entry, found {games_unified_count} in {orgs:?}"
         );
+    }
+
+    // --- record_platform / exit codes (finding 1) ---
+
+    /// The central fix for finding 1: a platform that is installed but
+    /// unreadable must become a failed *item*, appended to `failures`, and
+    /// must NOT be reported as if it were merely absent (that would hide a
+    /// real problem) and must NOT abort anything (there is nothing here to
+    /// abort — `record_platform` has no way to signal "stop the whole
+    /// run", which is the point).
+    #[test]
+    fn a_provider_read_failure_becomes_a_failed_item_not_an_installed_note() {
+        let mut games = Vec::new();
+        let mut infos = Vec::new();
+        let mut failures = Vec::new();
+
+        record_platform(
+            Some(Err("disk is unreadable".to_string())),
+            "not installed note (must not appear)",
+            "Steam is installed but could not be read",
+            &mut games,
+            &mut infos,
+            &mut failures,
+        );
+
+        assert!(games.is_empty());
+        assert!(infos.is_empty(), "a read failure must never be reported as an install note");
+        assert_eq!(failures, vec!["Steam is installed but could not be read: disk is unreadable"]);
+    }
+
+    /// The other half of the same distinction: a platform that was never
+    /// installed must land in `infos`, never in `failures` — it is not a
+    /// problem, it is the common case for most users.
+    #[test]
+    fn a_platform_that_is_not_installed_produces_an_info_note_not_a_failure() {
+        let mut games = Vec::new();
+        let mut infos = Vec::new();
+        let mut failures = Vec::new();
+
+        record_platform(
+            None,
+            "Epic Games Launcher is not installed; skipping.",
+            "unreadable prefix (must not appear)",
+            &mut games,
+            &mut infos,
+            &mut failures,
+        );
+
+        assert_eq!(infos, vec!["Epic Games Launcher is not installed; skipping."]);
+        assert!(failures.is_empty());
+    }
+
+    /// A successful read must append its games and produce neither an info
+    /// nor a failure — the ordinary, silent, working case.
+    #[test]
+    fn a_successful_detection_appends_its_games_without_any_note() {
+        let mut games = Vec::new();
+        let mut infos = Vec::new();
+        let mut failures = Vec::new();
+
+        record_platform(
+            Some(Ok(vec![test_game("440", "Team Fortress 2")])),
+            "note (must not appear)",
+            "prefix (must not appear)",
+            &mut games,
+            &mut infos,
+            &mut failures,
+        );
+
+        assert_eq!(games.len(), 1);
+        assert!(infos.is_empty());
+        assert!(failures.is_empty());
+    }
+
+    /// `exit_code` is the single place that turns a failed-item count into
+    /// a process exit code. Finding 1 depended on this never reaching `2`
+    /// — that code is reserved for `main`'s own `ComGuard::new()` check —
+    /// so this pins that down directly: any positive count, however large,
+    /// collapses to `1`.
+    #[test]
+    fn exit_code_collapses_any_positive_failure_count_to_one_and_never_to_two() {
+        assert_eq!(exit_code(0), 0);
+        assert_eq!(exit_code(1), 1);
+        assert_eq!(exit_code(2), 1, "two failures must still be exit code 1, not 2");
+        assert_eq!(exit_code(42), 1);
+    }
+
+    // --- resolve_bases (findings 2 and 3) ---
+
+    /// The mechanism behind both findings 2 and 3: one target failing to
+    /// resolve must not hide the other, and the failure must be named
+    /// rather than merged into silence. This is exercised with a fake
+    /// resolver because the real `layout::target_dir` only fails via a live
+    /// Windows known-folder lookup, which cannot be forced from a test.
+    #[test]
+    fn resolve_bases_keeps_the_resolved_target_and_names_the_unresolved_one() {
+        let (resolved, unresolved) = resolve_bases(
+            [Target::Desktop, Target::StartMenu],
+            |t| match t {
+                Target::Desktop => Ok(PathBuf::from(r"C:\Desktop")),
+                Target::StartMenu => Err(LayoutError::UnknownFolder("boom".into())),
+            },
+        );
+
+        assert_eq!(resolved, vec![(Target::Desktop, PathBuf::from(r"C:\Desktop"))]);
+        assert_eq!(unresolved.len(), 1);
+        assert_eq!(unresolved[0].0, Target::StartMenu);
+        assert!(
+            unresolved[0].1.contains("boom"),
+            "the resolver's own error detail must be preserved, got {:?}",
+            unresolved[0].1
+        );
+    }
+
+    /// When every target resolves, nothing is lost or misreported as
+    /// unresolved.
+    #[test]
+    fn resolve_bases_reports_no_unresolved_targets_when_everything_resolves() {
+        let (resolved, unresolved) =
+            resolve_bases([Target::Desktop, Target::StartMenu], |t| {
+                Ok(PathBuf::from(r"C:\Base").join(t.label()))
+            });
+        assert_eq!(resolved.len(), 2);
+        assert!(unresolved.is_empty());
+    }
+
+    /// `warn_unresolved` is what turns `resolve_bases`'s output into the
+    /// failed-item count `sync`, `clean` and `status` all fold into their
+    /// exit code — this is the piece that makes finding 2/3's fix ("name it
+    /// and exit 1") actually reach the exit code rather than only the
+    /// printed warning.
+    #[test]
+    fn warn_unresolved_counts_each_unresolved_target_exactly_once() {
+        let unresolved =
+            vec![(Target::StartMenu, "could not locate a Windows known folder: boom".to_string())];
+        assert_eq!(warn_unresolved(&unresolved, "scanned"), 1);
+        assert_eq!(warn_unresolved(&[], "scanned"), 0);
+    }
+
+    // --- summary_line (correction 3 / dry-run wording) ---
+
+    /// Correction 3's runtime half: after a dry run, the summary line must
+    /// say "would be created", never bare "created" — the latter would
+    /// contradict the tool's own `--help` promise that a dry run does not
+    /// modify the user's shortcuts.
+    #[test]
+    fn summary_line_uses_conditional_wording_under_dry_run() {
+        let s = ops::Summary { created: 3, updated: 1, ..Default::default() };
+
+        let dry = summary_line(&s, true);
+        assert!(dry.contains("3 would be created"), "got: {dry}");
+        assert!(dry.contains("1 would be updated"), "got: {dry}");
+        assert!(!dry.contains("3 created,"), "must not read as if it already happened: {dry}");
+
+        let real = summary_line(&s, false);
+        assert!(real.contains("3 created,"), "got: {real}");
+        assert!(!real.contains("would be"), "a real run must not hedge: {real}");
     }
 }
