@@ -26,8 +26,14 @@ const BUF_LEN: usize = 4096;
 /// saved to disk. See `writes_and_reads_back_a_description_at_the_measured_shell_link_limit`
 /// and its rejecting sibling in `tests/lnk_roundtrip.rs` for the boundary
 /// this constant is pinned to.
-#[cfg(windows)]
-const DESCRIPTION_LIMIT_UTF16: usize = 260;
+///
+/// Not `#[cfg(windows)]`-gated, unlike its siblings: `shortcut::signature`
+/// (compiled on every platform) budgets a game title against this same
+/// constant when composing a description, so that the value it produces
+/// never trips `check_round_trippable` below. There is exactly one number
+/// for this limit in the crate; `signature::encode` and `write_lnk` must
+/// never be allowed to drift apart on it.
+pub(crate) const DESCRIPTION_LIMIT_UTF16: usize = 260;
 
 /// Measured: unlike descriptions, arguments showed no write-time cap at
 /// all — a 32,000-character argument string round-tripped correctly given

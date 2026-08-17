@@ -3,7 +3,9 @@
 mod common;
 
 use std::path::{Path, PathBuf};
+use winshortcuts_organizer::platform::Platform;
 use winshortcuts_organizer::shortcut::{
+    signature::{decode, encode, Signature},
     writer::{read_lnk, write_lnk, ComGuard},
     LnkData,
 };
@@ -232,6 +234,100 @@ fn write_lnk_rejects_a_description_one_unit_over_the_shell_link_limit_and_create
         "a 261-unit description exceeds the measured 260-unit limit"
     );
     assert!(!lnk.exists(), "a rejected write must not create a file");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A title long enough to blow past the description budget on its own —
+/// without `signature::encode` truncating the title, this would trip
+/// `write_lnk`'s `FieldTooLong` rejection and the game would get no
+/// shortcut at all, which is worse than losing some tooltip text. Proves
+/// all three parts of the fix at once: the encoded description fits the
+/// measured 260-unit limit, `decode` still recovers the exact `Signature`
+/// (the marker survived), and `write_lnk` accepts the result outright.
+#[test]
+fn encode_truncates_a_long_title_so_write_lnk_accepts_the_result() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("lnk_long_title");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lnk = dir.join("LongTitle.lnk");
+
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    let explorer = PathBuf::from(&windir).join("explorer.exe");
+
+    let sig = Signature {
+        platform: Platform::Steam,
+        id: "105600".into(),
+    };
+    // A joke title or long visual-novel-style title, well past any
+    // plausible budget under the 260-unit limit.
+    let title = "A Very Long Game Title That Goes On And On ".repeat(10);
+    let description = encode(&title, &sig);
+
+    let unit_count = description.encode_utf16().count();
+    assert!(
+        unit_count <= 260,
+        "encoded description must fit the measured shell-link limit, was {unit_count}"
+    );
+    assert_eq!(decode(&description), Some(sig.clone()));
+
+    write_lnk(
+        &lnk,
+        &LnkData {
+            target: explorer,
+            args: String::new(),
+            working_dir: None,
+            icon: None,
+            description: description.clone(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(read_lnk(&lnk).unwrap().description, description);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Epic's `AppName` is an opaque identifier that can run up to 32
+/// characters, which makes the fixed suffix (and therefore the title
+/// budget) as tight as this format ever gets. Same three assertions as the
+/// Steam case above, against the tightest realistic budget rather than a
+/// short numeric Steam appid.
+#[test]
+fn encode_truncates_a_long_title_against_the_tightest_epic_budget() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("lnk_long_title_epic");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lnk = dir.join("LongTitleEpic.lnk");
+
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    let explorer = PathBuf::from(&windir).join("explorer.exe");
+
+    let sig = Signature {
+        platform: Platform::Epic,
+        id: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4".into(), // 32 characters
+    };
+    let title = "A Very Long Visual Novel Subtitle That Never Seems To End ".repeat(10);
+    let description = encode(&title, &sig);
+
+    let unit_count = description.encode_utf16().count();
+    assert!(
+        unit_count <= 260,
+        "encoded description must fit the measured shell-link limit, was {unit_count}"
+    );
+    assert_eq!(decode(&description), Some(sig.clone()));
+
+    write_lnk(
+        &lnk,
+        &LnkData {
+            target: explorer,
+            args: String::new(),
+            working_dir: None,
+            icon: None,
+            description: description.clone(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(read_lnk(&lnk).unwrap().description, description);
     std::fs::remove_dir_all(&dir).ok();
 }
 
