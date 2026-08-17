@@ -263,6 +263,19 @@ fn print_summary(s: &ops::Summary, dry_run: bool) {
     println!("{}", summary_line(s, dry_run));
 }
 
+/// Whether a batch actually went ahead, as distinct from how it turned out.
+///
+/// `sync` needs this and a `Summary` cannot supply it: a declined batch and a
+/// batch with nothing pending both produce all-zero counts, and those two
+/// must be told apart - see `should_save_preferences`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Applied {
+    /// The batch ran, or there was nothing pending so nothing was asked.
+    Proceeded,
+    /// The user was asked to confirm and answered no.
+    Declined,
+}
+
 /// Prints the pending actions, asks for confirmation unless `assume_yes` or
 /// there is nothing to do, applies them, and reports any per-item failures.
 ///
@@ -272,12 +285,18 @@ fn print_summary(s: &ops::Summary, dry_run: bool) {
 /// has already decided to proceed (or the batch was empty to begin with, in
 /// which case `apply` is still called, but only with a dry-run flag so it
 /// can never touch anything real).
+///
+/// Returns whether it proceeded alongside the summary, because "the user said
+/// no" is not something the counts can express - `sync` used to save the
+/// wizard's answers over the user's stored preferences even after they
+/// declined, precisely because it could not tell that case from a run with
+/// nothing to do.
 fn apply_with_confirmation(
     heading: &str,
     actions: &[Action],
     dry_run: bool,
     assume_yes: bool,
-) -> ops::Summary {
+) -> (ops::Summary, Applied) {
     let pending: Vec<&Action> = actions
         .iter()
         .filter(|a| !matches!(a, Action::Skip { .. }))
@@ -287,11 +306,14 @@ fn apply_with_confirmation(
     describe(actions);
 
     if pending.is_empty() {
-        return ops::summarize(&ops::apply(actions, true));
+        return (
+            ops::summarize(&ops::apply(actions, true)),
+            Applied::Proceeded,
+        );
     }
     if !dry_run && !confirm("Apply these changes?", assume_yes) {
         println!("Cancelled.");
-        return ops::Summary::default();
+        return (ops::Summary::default(), Applied::Declined);
     }
 
     let outcomes = ops::apply(actions, dry_run);
@@ -303,7 +325,34 @@ fn apply_with_confirmation(
             o.result.as_ref().unwrap_err()
         );
     }
-    ops::summarize(&outcomes)
+    (ops::summarize(&outcomes), Applied::Proceeded)
+}
+
+/// Whether this run may write the configuration back to disk.
+///
+/// Two reasons not to. A dry run was a question, not an instruction, so it
+/// must not reconfigure anything. And a user who answered "no" to a
+/// confirmation declined this configuration - writing the wizard's answers
+/// over their stored preferences anyway would mean the one action they
+/// explicitly refused is the one that still happened, and their previous
+/// target, organization and folder name are gone.
+///
+/// A run with nothing pending still saves: the user answered the wizard and
+/// there simply was nothing to change, which is exactly how someone adjusts
+/// preferences without any shortcut needing to move.
+///
+/// Declining for *any* target blocks the save, not only declining for all of
+/// them. Preferences are one setting shared by every target, so a partial
+/// refusal cannot be honored partially - and refusing to write is the
+/// recoverable direction: nothing is lost and re-running restores the choice,
+/// whereas overwriting preferences the user did not agree to cannot be
+/// undone.
+///
+/// Pulled out as a pure function because the path that reaches it cannot be
+/// executed by this test suite at all: it needs a real terminal for `inquire`
+/// to prompt on, and a real user to answer "no".
+fn should_save_preferences(dry_run: bool, outcomes: &[Applied]) -> bool {
+    !dry_run && !outcomes.contains(&Applied::Declined)
 }
 
 /// Reconciles and (subject to confirmation) applies changes for one sync
@@ -316,7 +365,7 @@ fn sync_target(
     target: Target,
     dry_run: bool,
     assume_yes: bool,
-) -> ops::Summary {
+) -> (ops::Summary, Applied) {
     let cache = config::cache_dir();
 
     let owned = ops::scan_owned(&layout::scan_dirs(base, &cfg.organization));
@@ -342,17 +391,18 @@ pub fn sync(cli: &Cli) -> i32 {
     let (resolved, unresolved) = resolve_bases(cfg.targets.iter().copied(), layout::target_dir);
     failed += warn_unresolved(&unresolved, "synced");
 
+    let mut applied = Vec::new();
     for (target, base) in resolved {
-        let s = sync_target(&cfg, &games, &base, target, cli.dry_run, cli.yes);
+        let (s, outcome) = sync_target(&cfg, &games, &base, target, cli.dry_run, cli.yes);
         print_summary(&s, cli.dry_run);
         failed += s.failed;
+        applied.push(outcome);
     }
 
-    // Never on a dry run (the user asked what would happen, not to be
-    // reconfigured — see the module-level note on `--dry-run`), and never
-    // before this point, so a wizard cancellation above returns without
-    // writing anything either.
-    if !cli.dry_run {
+    // Never before this point, so a wizard cancellation above returns without
+    // writing anything either. See `should_save_preferences` for the two
+    // reasons this run may not be allowed to write at all.
+    if should_save_preferences(cli.dry_run, &applied) {
         if let Err(e) = config::save(&path, &cfg) {
             eprintln!("Warning: could not save preferences: {e}");
         }
@@ -405,7 +455,10 @@ pub fn clean(cli: &Cli) -> i32 {
     let owned = ops::scan_owned(&dirs);
     let actions = plan(&[], &owned);
 
-    let summary = apply_with_confirmation("Every managed layout", &actions, cli.dry_run, cli.yes);
+    // `clean` never writes preferences, so whether the user confirmed is of
+    // no further interest here.
+    let (summary, _) =
+        apply_with_confirmation("Every managed layout", &actions, cli.dry_run, cli.yes);
     print_summary(&summary, cli.dry_run);
     failed += summary.failed;
     exit_code(failed)
@@ -472,6 +525,67 @@ mod tests {
                 r"C:\Windows\explorer.exe",
             ))],
         }
+    }
+
+    // --- should_save_preferences ---
+
+    /// The defect: `sync` wrote the wizard's answers to disk on any non-dry
+    /// run, including one where the user had just answered "no" to the
+    /// confirmation. Their stored target, organization and folder name were
+    /// replaced by the very configuration they had declined - the one action
+    /// they explicitly refused being the only one that still happened.
+    #[test]
+    fn preferences_are_not_saved_when_the_user_declined_the_confirmation() {
+        assert!(!should_save_preferences(false, &[Applied::Declined]));
+    }
+
+    /// The ordinary interactive run: the user answered the wizard, confirmed
+    /// the changes, and their answers are theirs to keep.
+    #[test]
+    fn preferences_are_saved_when_the_user_confirmed() {
+        assert!(should_save_preferences(false, &[Applied::Proceeded]));
+    }
+
+    /// A run with nothing pending never asks anything, and must still save:
+    /// that is exactly how someone changes preferences when no shortcut
+    /// happens to need moving. `Applied` exists to keep this case
+    /// distinguishable from a decline, which a `Summary` alone cannot do
+    /// because both produce all-zero counts.
+    #[test]
+    fn preferences_are_saved_when_there_was_nothing_to_confirm() {
+        assert!(should_save_preferences(false, &[]));
+        assert!(should_save_preferences(false, &[Applied::Proceeded]));
+    }
+
+    /// A dry run was a question, not an instruction. It must not reconfigure
+    /// anything, however the confirmations went - including the case where
+    /// nothing was asked at all.
+    #[test]
+    fn a_dry_run_never_saves_preferences() {
+        assert!(!should_save_preferences(true, &[]));
+        assert!(!should_save_preferences(true, &[Applied::Proceeded]));
+        assert!(!should_save_preferences(true, &[Applied::Declined]));
+    }
+
+    /// With both Desktop and Start Menu configured, declining either one
+    /// blocks the save. Preferences are a single setting shared by every
+    /// target, so a partial refusal cannot be honored partially, and refusing
+    /// to write is the recoverable direction. Both orders are checked so this
+    /// cannot pass by only ever inspecting the first or the last entry.
+    #[test]
+    fn declining_any_one_target_blocks_the_save_whichever_order_it_came_in() {
+        assert!(!should_save_preferences(
+            false,
+            &[Applied::Proceeded, Applied::Declined]
+        ));
+        assert!(!should_save_preferences(
+            false,
+            &[Applied::Declined, Applied::Proceeded]
+        ));
+        assert!(should_save_preferences(
+            false,
+            &[Applied::Proceeded, Applied::Proceeded]
+        ));
     }
 
     // --- record_platform / exit codes (finding 1) ---
