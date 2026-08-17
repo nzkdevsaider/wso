@@ -40,7 +40,10 @@ fn round_trips_every_field_with_an_icon_independent_of_the_target() {
     ));
     let explorer = windir.join("explorer.exe");
     let shell32 = windir.join("System32").join("shell32.dll");
-    assert_ne!(explorer, shell32, "test fixture must use two distinct real files");
+    assert_ne!(
+        explorer, shell32,
+        "test fixture must use two distinct real files"
+    );
 
     let data = LnkData {
         target: explorer.clone(),
@@ -99,20 +102,23 @@ fn preserves_a_quoted_uri_argument_for_epic() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// `read_lnk` must return a foreign shortcut's description exactly as
-/// written, with no normalization or default substitution — the ownership
-/// check downstream depends on comparing this string byte-for-byte against
-/// the `[wso:...]` marker format.
+/// This description does not carry the `[wso:...]` ownership marker — it
+/// stands in for a value some other, non-owning code path put there. The
+/// point is not that another application wrote the file (both the write
+/// and the read here go through this crate's own functions); the point is
+/// that `read_lnk` must not normalize, default, or otherwise alter a
+/// description just because it doesn't match the marker shape the
+/// ownership check (`shortcut::signature`) is looking for.
 #[test]
-fn reads_back_a_foreign_description_unmodified() {
+fn round_trips_a_description_without_the_wso_marker_byte_for_byte() {
     let _com = ComGuard::new().unwrap();
-    let dir = common::unique_temp_dir("lnk_foreign_desc");
+    let dir = common::unique_temp_dir("lnk_non_owned_desc");
     std::fs::create_dir_all(&dir).unwrap();
     let lnk = dir.join("NotOurs.lnk");
 
     let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
     let explorer = PathBuf::from(&windir).join("explorer.exe");
-    let foreign_description = "Some Other Launcher v2.1 — do not touch";
+    let non_owned_description = "Some Other Launcher v2.1 — do not touch";
 
     write_lnk(
         &lnk,
@@ -121,11 +127,178 @@ fn reads_back_a_foreign_description_unmodified() {
             args: String::new(),
             working_dir: None,
             icon: None,
-            description: foreign_description.into(),
+            description: non_owned_description.into(),
         },
     )
     .unwrap();
 
-    assert_eq!(read_lnk(&lnk).unwrap().description, foreign_description);
+    assert_eq!(read_lnk(&lnk).unwrap().description, non_owned_description);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `icon` and `working_dir` both branch on `is_empty()` on the read side
+/// (an empty string becomes `None`), but `description` does not — it is a
+/// plain `String`, and an empty one is a legitimate value (most shortcuts
+/// this tool creates for platforms with no natural description source
+/// will have one). This is the witness that the empty case for
+/// `description` specifically is not silently turned into something else.
+#[test]
+fn round_trips_an_empty_description() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("lnk_empty_desc");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lnk = dir.join("Empty.lnk");
+
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    let explorer = PathBuf::from(&windir).join("explorer.exe");
+
+    write_lnk(
+        &lnk,
+        &LnkData {
+            target: explorer,
+            args: String::new(),
+            working_dir: None,
+            icon: None,
+            description: String::new(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(read_lnk(&lnk).unwrap().description, "");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Measured directly (see the task report): a description of exactly 260
+/// UTF-16 code units is the longest that `IShellLinkW::SetDescription`
+/// preserves intact — this is the positive half of that boundary, proving
+/// `write_lnk`'s limit constant matches what Windows actually allows
+/// rather than an approximation of it.
+#[test]
+fn writes_and_reads_back_a_description_at_the_measured_shell_link_limit() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("lnk_desc_at_limit");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lnk = dir.join("AtLimit.lnk");
+
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    let explorer = PathBuf::from(&windir).join("explorer.exe");
+    let description = "d".repeat(260);
+
+    write_lnk(
+        &lnk,
+        &LnkData {
+            target: explorer,
+            args: String::new(),
+            working_dir: None,
+            icon: None,
+            description: description.clone(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(read_lnk(&lnk).unwrap().description, description);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// One UTF-16 code unit past the measured 260-unit shell-link limit:
+/// `write_lnk` must reject this rather than silently hand Windows a
+/// description that `SetDescription` would then truncate on disk — the
+/// whole point of validating up front is that nothing this tool writes
+/// can come back different from what it wrote. No `.lnk` file may exist
+/// afterward.
+#[test]
+fn write_lnk_rejects_a_description_one_unit_over_the_shell_link_limit_and_creates_no_file() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("lnk_desc_over_limit");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lnk = dir.join("OverLimit.lnk");
+
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    let explorer = PathBuf::from(&windir).join("explorer.exe");
+
+    let result = write_lnk(
+        &lnk,
+        &LnkData {
+            target: explorer,
+            args: String::new(),
+            working_dir: None,
+            icon: None,
+            description: "d".repeat(261),
+        },
+    );
+
+    assert!(
+        result.is_err(),
+        "a 261-unit description exceeds the measured 260-unit limit"
+    );
+    assert!(!lnk.exists(), "a rejected write must not create a file");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Measured directly: arguments have no Windows-imposed cap (a 32,000-unit
+/// argument string round-trips fine given a large enough read buffer), so
+/// the binding constraint is this crate's own read buffer, which needs one
+/// code unit of headroom to null-terminate. This is the positive half of
+/// that boundary — the longest argument string the current buffer size
+/// can still read back exactly.
+#[test]
+fn writes_and_reads_back_arguments_at_the_buffer_limit() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("lnk_args_at_limit");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lnk = dir.join("AtLimit.lnk");
+
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    let explorer = PathBuf::from(&windir).join("explorer.exe");
+    let args = "a".repeat(4095);
+
+    write_lnk(
+        &lnk,
+        &LnkData {
+            target: explorer,
+            args: args.clone(),
+            working_dir: None,
+            icon: None,
+            description: String::new(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(read_lnk(&lnk).unwrap().args, args);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// One code unit past the buffer's usable capacity: without validation,
+/// `read_lnk` would silently hand back a 4095-unit argument string that
+/// looks complete but is missing its last character (see the sibling test
+/// above for the exact boundary) — a shortcut this tool wrote would then
+/// fail to read back byte-for-byte. `write_lnk` must reject it instead,
+/// and no `.lnk` file may exist afterward.
+#[test]
+fn write_lnk_rejects_arguments_one_unit_over_the_buffer_limit_and_creates_no_file() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("lnk_args_over_limit");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lnk = dir.join("OverLimit.lnk");
+
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    let explorer = PathBuf::from(&windir).join("explorer.exe");
+
+    let result = write_lnk(
+        &lnk,
+        &LnkData {
+            target: explorer,
+            args: "a".repeat(4096),
+            working_dir: None,
+            icon: None,
+            description: String::new(),
+        },
+    );
+
+    assert!(
+        result.is_err(),
+        "a 4096-unit argument string exceeds the buffer's 4095-unit limit"
+    );
+    assert!(!lnk.exists(), "a rejected write must not create a file");
     std::fs::remove_dir_all(&dir).ok();
 }
