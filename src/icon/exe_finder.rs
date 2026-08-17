@@ -26,13 +26,7 @@ const NAME_BLOCKLIST: [&str; 12] = [
 ];
 
 /// Directory names that only ever hold redistributables.
-const DIR_BLOCKLIST: [&str; 5] = [
-    "_commonredist",
-    "redist",
-    "directx",
-    "dotnet",
-    "vcredist",
-];
+const DIR_BLOCKLIST: [&str; 5] = ["_commonredist", "redist", "directx", "dotnet", "vcredist"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExeCandidate {
@@ -116,15 +110,19 @@ pub fn pick_executable<'a>(
     install_dir_name: &str,
     candidates: &'a [ExeCandidate],
 ) -> Option<&'a ExeCandidate> {
-    let viable: Vec<&ExeCandidate> =
-        candidates.iter().filter(|c| !c.is_blocklisted()).collect();
+    let viable: Vec<&ExeCandidate> = candidates.iter().filter(|c| !c.is_blocklisted()).collect();
 
     let min_depth = viable.iter().map(|c| c.depth()).min()?;
 
     viable
         .into_iter()
         .filter(|c| c.depth() == min_depth)
-        .max_by_key(|c| (name_score(&c.stem_lower(), game_name, install_dir_name), c.size))
+        .max_by_key(|c| {
+            (
+                name_score(&c.stem_lower(), game_name, install_dir_name),
+                c.size,
+            )
+        })
 }
 
 /// Walks an install directory collecting `.exe` files, bounded by depth so a
@@ -153,7 +151,10 @@ fn walk(root: &Path, dir: &Path, remaining: usize, out: &mut Vec<ExeCandidate>) 
             .is_some_and(|e| e.eq_ignore_ascii_case("exe"))
         {
             if let Ok(rel) = path.strip_prefix(root) {
-                out.push(ExeCandidate { rel_path: rel.to_path_buf(), size: meta.len() });
+                out.push(ExeCandidate {
+                    rel_path: rel.to_path_buf(),
+                    size: meta.len(),
+                });
             }
         }
     }
@@ -164,7 +165,10 @@ mod tests {
     use super::*;
 
     fn c(path: &str, size: u64) -> ExeCandidate {
-        ExeCandidate { rel_path: PathBuf::from(path), size }
+        ExeCandidate {
+            rel_path: PathBuf::from(path),
+            size,
+        }
     }
 
     fn pick<'a>(name: &str, dir: &str, cands: &'a [ExeCandidate]) -> &'a str {
@@ -318,15 +322,15 @@ mod tests {
         #[test]
         fn size_breaks_a_tie_when_name_scores_are_equal() {
             let cands = [c(r"tools\launcher.exe", 500), c(r"bin\launcher.exe", 100)];
-            assert_eq!(
-                pick("Some Game", "SomeGame", &cands),
-                r"tools\launcher.exe"
-            );
+            assert_eq!(pick("Some Game", "SomeGame", &cands), r"tools\launcher.exe");
         }
 
         #[test]
         fn returns_none_when_everything_is_blocklisted() {
-            let cands = [c("vcredist_x64.exe", 100), c("UnityCrashHandler64.exe", 200)];
+            let cands = [
+                c("vcredist_x64.exe", 100),
+                c("UnityCrashHandler64.exe", 200),
+            ];
             assert!(pick_executable("Some Game", "SomeGame", &cands).is_none());
         }
 

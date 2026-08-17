@@ -31,9 +31,17 @@ fn discovers_games_and_filters_infrastructure() {
         "\"AppState\"\n{\n\"appid\"\t\"228980\"\n\"name\"\t\"Steamworks Common Redistributables\"\n\"installdir\"\t\"Steamworks Shared\"\n}\n",
     );
     fs::create_dir_all(root.join("steamapps").join("common").join("Terraria")).unwrap();
-    fs::create_dir_all(root.join("steamapps").join("common").join("Steamworks Shared")).unwrap();
+    fs::create_dir_all(
+        root.join("steamapps")
+            .join("common")
+            .join("Steamworks Shared"),
+    )
+    .unwrap();
     fs::write(
-        root.join("steamapps").join("common").join("Terraria").join("Terraria.exe"),
+        root.join("steamapps")
+            .join("common")
+            .join("Terraria")
+            .join("Terraria.exe"),
         vec![0u8; 100],
     )
     .unwrap();
@@ -52,7 +60,11 @@ fn discovers_games_and_filters_infrastructure() {
     assert_eq!(games[0].id, "105600");
     assert_eq!(games[0].launch.args, "-applaunch 105600");
     assert_eq!(games[0].launch.program, root.join("steam.exe"));
-    assert_eq!(games[0].icon_candidates.len(), 3, "exe, librarycache logo.png, fallback");
+    assert_eq!(
+        games[0].icon_candidates.len(),
+        3,
+        "exe, librarycache logo.png, fallback"
+    );
 
     fs::remove_dir_all(&tmp).unwrap();
 }

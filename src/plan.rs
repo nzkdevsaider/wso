@@ -39,11 +39,24 @@ pub enum Action {
     /// Rewrites the shortcut in place at its current path: the launch
     /// command, working directory, or description changed, but not the
     /// path itself (an icon-only change is a `FixIcon` instead).
-    Retarget { path: PathBuf, lnk: LnkData },
-    FixIcon { path: PathBuf, lnk: LnkData },
-    Move { from: PathBuf, to: PathBuf, lnk: LnkData },
+    Retarget {
+        path: PathBuf,
+        lnk: LnkData,
+    },
+    FixIcon {
+        path: PathBuf,
+        lnk: LnkData,
+    },
+    Move {
+        from: PathBuf,
+        to: PathBuf,
+        lnk: LnkData,
+    },
     DeleteOrphan(PathBuf),
-    Skip { path: PathBuf, reason: SkipReason },
+    Skip {
+        path: PathBuf,
+        reason: SkipReason,
+    },
 }
 
 /// Reconciles what should exist against what this tool already owns.
@@ -122,9 +135,15 @@ pub fn plan(desired: &[DesiredShortcut], owned: &[OwnedShortcut]) -> Vec<Action>
             // guaranteed to also change `path` and trigger a `Move`.
             // Without this, such a title change would be invisible here and
             // the shortcut's tooltip would never refresh.
-            actions.push(Action::Retarget { path: d.path.clone(), lnk: d.lnk.clone() });
+            actions.push(Action::Retarget {
+                path: d.path.clone(),
+                lnk: d.lnk.clone(),
+            });
         } else if o.lnk.icon != d.lnk.icon {
-            actions.push(Action::FixIcon { path: d.path.clone(), lnk: d.lnk.clone() });
+            actions.push(Action::FixIcon {
+                path: d.path.clone(),
+                lnk: d.lnk.clone(),
+            });
         } else {
             actions.push(Action::Skip {
                 path: d.path.clone(),
@@ -149,7 +168,10 @@ mod tests {
     use std::path::PathBuf;
 
     fn sig(id: &str) -> Signature {
-        Signature { platform: Platform::Steam, id: id.into() }
+        Signature {
+            platform: Platform::Steam,
+            id: id.into(),
+        }
     }
 
     fn lnk(target: &str, args: &str, icon: &str) -> LnkData {
@@ -163,7 +185,10 @@ mod tests {
     }
 
     fn lnk_with_description(target: &str, args: &str, icon: &str, description: &str) -> LnkData {
-        LnkData { description: description.into(), ..lnk(target, args, icon) }
+        LnkData {
+            description: description.into(),
+            ..lnk(target, args, icon)
+        }
     }
 
     fn desired(id: &str, path: &str, icon: &str) -> DesiredShortcut {
@@ -196,7 +221,10 @@ mod tests {
         let o = [owned("440", r"C:\D\TF2.lnk", "tf2.exe")];
         assert!(matches!(
             plan(&d, &o).as_slice(),
-            [Action::Skip { reason: SkipReason::UpToDate, .. }]
+            [Action::Skip {
+                reason: SkipReason::UpToDate,
+                ..
+            }]
         ));
     }
 
@@ -281,7 +309,10 @@ mod tests {
     #[test]
     fn different_platforms_with_the_same_id_do_not_match() {
         let d = [DesiredShortcut {
-            sig: Signature { platform: Platform::Epic, id: "440".into() },
+            sig: Signature {
+                platform: Platform::Epic,
+                id: "440".into(),
+            },
             path: PathBuf::from(r"C:\D\E.lnk"),
             lnk: lnk("explorer.exe", "uri", "e.exe"),
         }];
@@ -295,31 +326,43 @@ mod tests {
     #[test]
     fn handles_a_mixed_batch() {
         let d = [
-            desired("440", r"C:\D\TF2.lnk", "tf2.exe"),   // up to date
-            desired("570", r"C:\D\Dota.lnk", "new.exe"),  // icon changed
-            desired("620", r"C:\D\P2.lnk", "p2.exe"),     // new
+            desired("440", r"C:\D\TF2.lnk", "tf2.exe"),  // up to date
+            desired("570", r"C:\D\Dota.lnk", "new.exe"), // icon changed
+            desired("620", r"C:\D\P2.lnk", "p2.exe"),    // new
         ];
         let o = [
             owned("440", r"C:\D\TF2.lnk", "tf2.exe"),
             owned("570", r"C:\D\Dota.lnk", "old.exe"),
-            owned("999", r"C:\D\Gone.lnk", "gone.exe"),   // uninstalled
+            owned("999", r"C:\D\Gone.lnk", "gone.exe"), // uninstalled
         ];
         let actions = plan(&d, &o);
         assert_eq!(actions.len(), 4);
         assert_eq!(
-            actions.iter().filter(|a| matches!(a, Action::Skip { .. })).count(),
+            actions
+                .iter()
+                .filter(|a| matches!(a, Action::Skip { .. }))
+                .count(),
             1
         );
         assert_eq!(
-            actions.iter().filter(|a| matches!(a, Action::FixIcon { .. })).count(),
+            actions
+                .iter()
+                .filter(|a| matches!(a, Action::FixIcon { .. }))
+                .count(),
             1
         );
         assert_eq!(
-            actions.iter().filter(|a| matches!(a, Action::Create(_))).count(),
+            actions
+                .iter()
+                .filter(|a| matches!(a, Action::Create(_)))
+                .count(),
             1
         );
         assert_eq!(
-            actions.iter().filter(|a| matches!(a, Action::DeleteOrphan(_))).count(),
+            actions
+                .iter()
+                .filter(|a| matches!(a, Action::DeleteOrphan(_)))
+                .count(),
             1
         );
     }
@@ -391,7 +434,10 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert!(matches!(
             actions[0],
-            Action::Skip { reason: SkipReason::UpToDate, .. }
+            Action::Skip {
+                reason: SkipReason::UpToDate,
+                ..
+            }
         ));
         assert!(matches!(
             &actions[1],
@@ -410,7 +456,8 @@ mod tests {
     /// independent of scan order, not an accident of whichever order
     /// `scan_owned` happened to return them in.
     #[test]
-    fn a_duplicate_owned_signature_prefers_the_entry_at_the_desired_path_regardless_of_scan_order() {
+    fn a_duplicate_owned_signature_prefers_the_entry_at_the_desired_path_regardless_of_scan_order()
+    {
         let d = [desired("440", r"C:\D\TF2.lnk", "tf2.exe")];
         let stale = owned("440", r"C:\D\Old\TF2.lnk", "tf2.exe");
         let correct = owned("440", r"C:\D\TF2.lnk", "tf2.exe");
@@ -426,7 +473,13 @@ mod tests {
                 .iter()
                 .find(|a| matches!(a, Action::Skip { .. }))
                 .unwrap_or_else(|| panic!("expected a Skip among {actions:?}"));
-            assert!(matches!(skip, Action::Skip { reason: SkipReason::UpToDate, .. }));
+            assert!(matches!(
+                skip,
+                Action::Skip {
+                    reason: SkipReason::UpToDate,
+                    ..
+                }
+            ));
 
             let orphan = actions
                 .iter()
@@ -460,7 +513,10 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert!(matches!(actions[0], Action::Move { .. }));
         match &actions[1] {
-            Action::Skip { path, reason: SkipReason::DuplicateSignature } => {
+            Action::Skip {
+                path,
+                reason: SkipReason::DuplicateSignature,
+            } => {
                 assert_eq!(path, &PathBuf::from(r"C:\D\Games\TF2 Again.lnk"));
             }
             other => panic!("expected a duplicate-signature Skip, got {other:?}"),

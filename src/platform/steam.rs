@@ -4,12 +4,12 @@ use crate::icon::exe_finder;
 use std::path::{Path, PathBuf};
 
 /// Appids that ship with Steam but are not games.
-const INFRA_APPIDS: [&str; 6] =
-    ["228980", "1070560", "1391110", "1493710", "1580130", "1826330"];
+const INFRA_APPIDS: [&str; 6] = [
+    "228980", "1070560", "1391110", "1493710", "1580130", "1826330",
+];
 
 /// Name prefixes that identify runtimes and compatibility tools.
-const INFRA_NAME_PREFIXES: [&str; 3] =
-    ["proton ", "steam linux runtime", "steamworks "];
+const INFRA_NAME_PREFIXES: [&str; 3] = ["proton ", "steam linux runtime", "steamworks "];
 
 pub struct SteamProvider {
     root: PathBuf,
@@ -157,7 +157,11 @@ impl SteamProvider {
         if let Some(exe) = exe_finder::pick_executable(&app.name, &app.installdir, &candidates) {
             icons.push(IconCandidate::Executable(install_dir.join(&exe.rel_path)));
         }
-        let cache_dir = self.root.join("appcache").join("librarycache").join(&app.appid);
+        let cache_dir = self
+            .root
+            .join("appcache")
+            .join("librarycache")
+            .join(&app.appid);
         if let Some(image) = pick_library_image(&cache_dir) {
             icons.push(IconCandidate::ImageFile(image));
         }
@@ -249,7 +253,10 @@ mod tests {
 
     #[test]
     fn filters_infrastructure_by_appid() {
-        assert!(is_infrastructure("228980", "Steamworks Common Redistributables"));
+        assert!(is_infrastructure(
+            "228980",
+            "Steamworks Common Redistributables"
+        ));
         assert!(is_infrastructure("1070560", "Steam Linux Runtime"));
         assert!(!is_infrastructure("105600", "Terraria"));
     }
@@ -257,7 +264,10 @@ mod tests {
     #[test]
     fn filters_infrastructure_by_name() {
         assert!(is_infrastructure("999999", "Proton 9.0"));
-        assert!(is_infrastructure("999998", "Steam Linux Runtime 3.0 (sniper)"));
+        assert!(is_infrastructure(
+            "999998",
+            "Steam Linux Runtime 3.0 (sniper)"
+        ));
         assert!(is_infrastructure("999997", "Steamworks Shared"));
         assert!(!is_infrastructure("999996", "Protonwall"));
     }
@@ -351,7 +361,11 @@ fn registry_roots() -> Vec<PathBuf> {
 
     let mut out = Vec::new();
     let queries = [
-        (HKEY_CURRENT_USER, w!("Software\\Valve\\Steam"), w!("SteamPath")),
+        (
+            HKEY_CURRENT_USER,
+            w!("Software\\Valve\\Steam"),
+            w!("SteamPath"),
+        ),
         (
             HKEY_LOCAL_MACHINE,
             w!("SOFTWARE\\WOW6432Node\\Valve\\Steam"),

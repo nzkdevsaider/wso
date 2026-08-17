@@ -125,7 +125,10 @@ mod tests {
         }
         let mut bytes: Vec<u8> = Vec::new();
         image::DynamicImage::ImageRgba8(img)
-            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
             .unwrap();
         std::fs::write(path, bytes).unwrap();
     }

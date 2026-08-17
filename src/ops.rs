@@ -114,7 +114,10 @@ pub fn build_desired(
             let resolved = cfg
                 .icon_overrides
                 .get(&qualified)
-                .map(|p| icon::ResolvedIcon { path: p.clone(), index: 0 })
+                .map(|p| icon::ResolvedIcon {
+                    path: p.clone(),
+                    index: 0,
+                })
                 .or_else(|| icon::resolve(&g.icon_candidates, cache, &qualified.replace(':', "_")));
 
             let sig = crate::shortcut::signature::Signature {
@@ -179,7 +182,9 @@ pub fn apply(actions: &[Action], dry_run: bool) -> Vec<Outcome> {
             Action::Create(d) => (
                 "create",
                 display_name(&d.path),
-                run(dry_run, || write_lnk(&d.path, &d.lnk).map_err(|e| e.to_string())),
+                run(dry_run, || {
+                    write_lnk(&d.path, &d.lnk).map_err(|e| e.to_string())
+                }),
             ),
             Action::Retarget { path, lnk } => (
                 "retarget",
@@ -232,7 +237,11 @@ pub fn apply(actions: &[Action], dry_run: bool) -> Vec<Outcome> {
             Action::Skip { path, .. } => ("skip", display_name(path), Ok(())),
         };
 
-        outcomes.push(Outcome { action: label.to_string(), name, result });
+        outcomes.push(Outcome {
+            action: label.to_string(),
+            name,
+            result,
+        });
     }
 
     outcomes

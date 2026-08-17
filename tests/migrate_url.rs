@@ -17,7 +17,11 @@ fn system_exe() -> PathBuf {
 }
 
 fn legacy_url(path: PathBuf, appid: &str, icon_file: Option<PathBuf>) -> LegacyUrl {
-    LegacyUrl { path, appid: appid.into(), icon_file }
+    LegacyUrl {
+        path,
+        appid: appid.into(),
+        icon_file,
+    }
 }
 
 /// The ordinary case: no collision, no game detected, no still-existing
@@ -38,7 +42,10 @@ fn converts_a_url_with_no_collision_and_removes_the_original() {
     let outcome = convert_one(&legacy, &steam, &[], &dir.join("cache"), false);
 
     assert_eq!(outcome.failed, 0);
-    assert!(!url_path.exists(), "the .url must be removed after a successful conversion");
+    assert!(
+        !url_path.exists(),
+        "the .url must be removed after a successful conversion"
+    );
 
     let lnk_path = dir.join("Terraria.lnk");
     assert!(lnk_path.is_file(), "the .lnk must have been written");
@@ -48,7 +55,10 @@ fn converts_a_url_with_no_collision_and_removes_the_original() {
     assert_eq!(data.target, steam.root().join("steam.exe"));
     assert_eq!(
         decode(&data.description),
-        Some(Signature { platform: Platform::Steam, id: "105600".into() })
+        Some(Signature {
+            platform: Platform::Steam,
+            id: "105600".into()
+        })
     );
 
     std::fs::remove_dir_all(&dir).ok();
@@ -74,7 +84,11 @@ fn uses_the_urls_icon_file_when_it_still_exists_on_disk() {
     let outcome = convert_one(&legacy, &steam, &[], &dir.join("cache"), false);
 
     assert_eq!(outcome.failed, 0);
-    assert_eq!(outcome.has_icon, Some(true), "a still-existing IconFile must count as a resolved icon");
+    assert_eq!(
+        outcome.has_icon,
+        Some(true),
+        "a still-existing IconFile must count as a resolved icon"
+    );
     let data = read_lnk(&dir.join("Terraria.lnk")).unwrap();
     assert_eq!(data.icon.map(|(p, _)| p), Some(icon_path));
 
@@ -109,18 +123,34 @@ fn falls_back_to_the_games_icon_chain_when_the_urls_icon_file_is_missing() {
         icon_candidates: vec![IconCandidate::Fallback(fallback_icon.clone())],
     };
 
-    let missing_icon = dir.join("Steam").join("steam").join("games").join("gone.ico");
-    assert!(!missing_icon.exists(), "fixture must name an icon that is genuinely absent");
+    let missing_icon = dir
+        .join("Steam")
+        .join("steam")
+        .join("games")
+        .join("gone.ico");
+    assert!(
+        !missing_icon.exists(),
+        "fixture must name an icon that is genuinely absent"
+    );
 
     let url_path = dir.join("Terraria.url");
     std::fs::write(&url_path, "placeholder").unwrap();
     let legacy = legacy_url(url_path.clone(), "105600", Some(missing_icon));
 
-    let outcome =
-        convert_one(&legacy, &steam, std::slice::from_ref(&game), &dir.join("cache"), false);
+    let outcome = convert_one(
+        &legacy,
+        &steam,
+        std::slice::from_ref(&game),
+        &dir.join("cache"),
+        false,
+    );
 
     assert_eq!(outcome.failed, 0);
-    assert_eq!(outcome.has_icon, Some(true), "the fallback icon must count as resolved");
+    assert_eq!(
+        outcome.has_icon,
+        Some(true),
+        "the fallback icon must count as resolved"
+    );
     let data = read_lnk(&dir.join("Terraria.lnk")).unwrap();
     assert_eq!(
         data.icon.map(|(p, _)| p),
@@ -151,8 +181,15 @@ fn an_empty_game_list_and_a_missing_icon_file_produces_an_icon_less_lnk_and_repo
     std::fs::create_dir_all(&dir).unwrap();
     let steam = SteamProvider::from_root(dir.join("Steam"));
 
-    let missing_icon = dir.join("Steam").join("steam").join("games").join("gone.ico");
-    assert!(!missing_icon.exists(), "fixture must name an icon that is genuinely absent");
+    let missing_icon = dir
+        .join("Steam")
+        .join("steam")
+        .join("games")
+        .join("gone.ico");
+    assert!(
+        !missing_icon.exists(),
+        "fixture must name an icon that is genuinely absent"
+    );
 
     let url_path = dir.join("Terraria.url");
     std::fs::write(&url_path, "placeholder").unwrap();
@@ -164,13 +201,22 @@ fn an_empty_game_list_and_a_missing_icon_file_produces_an_icon_less_lnk_and_repo
     // installed".
     let outcome = convert_one(&legacy, &steam, &[], &dir.join("cache"), false);
 
-    assert_eq!(outcome.failed, 0, "the conversion itself must still succeed");
-    assert!(!url_path.exists(), "the .url is still replaced — refusing would help no one here");
+    assert_eq!(
+        outcome.failed, 0,
+        "the conversion itself must still succeed"
+    );
+    assert!(
+        !url_path.exists(),
+        "the .url is still replaced — refusing would help no one here"
+    );
 
     let lnk_path = dir.join("Terraria.lnk");
     assert!(lnk_path.is_file());
     let data = read_lnk(&lnk_path).unwrap();
-    assert_eq!(data.icon, None, "with no game and no IconFile, the written shortcut has no icon");
+    assert_eq!(
+        data.icon, None,
+        "with no game and no IconFile, the written shortcut has no icon"
+    );
     assert_eq!(
         outcome.has_icon,
         Some(false),
@@ -190,7 +236,10 @@ fn overwrites_an_existing_lnk_already_owned_for_the_same_game() {
     std::fs::create_dir_all(&dir).unwrap();
     let steam = SteamProvider::from_root(dir.join("Steam"));
 
-    let sig = Signature { platform: Platform::Steam, id: "105600".into() };
+    let sig = Signature {
+        platform: Platform::Steam,
+        id: "105600".into(),
+    };
     let lnk_path = dir.join("Terraria.lnk");
     write_lnk(
         &lnk_path,
@@ -210,7 +259,10 @@ fn overwrites_an_existing_lnk_already_owned_for_the_same_game() {
 
     let outcome = convert_one(&legacy, &steam, &[], &dir.join("cache"), false);
 
-    assert_eq!(outcome.failed, 0, "overwriting our own shortcut for the same game must succeed");
+    assert_eq!(
+        outcome.failed, 0,
+        "overwriting our own shortcut for the same game must succeed"
+    );
     assert!(!url_path.exists());
     let data = read_lnk(&lnk_path).unwrap();
     assert_eq!(
@@ -253,9 +305,18 @@ fn refuses_to_overwrite_a_foreign_lnk_and_leaves_everything_untouched() {
 
     let outcome = convert_one(&legacy, &steam, &[], &dir.join("cache"), false);
 
-    assert_eq!(outcome.failed, 1, "a blocked collision must count as a failed item");
-    assert_eq!(outcome.has_icon, None, "nothing was written, so there is no icon to report on");
-    assert!(url_path.is_file(), "the .url must survive when its .lnk could not be safely written");
+    assert_eq!(
+        outcome.failed, 1,
+        "a blocked collision must count as a failed item"
+    );
+    assert_eq!(
+        outcome.has_icon, None,
+        "nothing was written, so there is no icon to report on"
+    );
+    assert!(
+        url_path.is_file(),
+        "the .url must survive when its .lnk could not be safely written"
+    );
     assert_eq!(
         std::fs::read(&lnk_path).unwrap(),
         original_bytes,
@@ -275,7 +336,10 @@ fn refuses_to_overwrite_an_lnk_owned_for_a_different_game() {
     std::fs::create_dir_all(&dir).unwrap();
     let steam = SteamProvider::from_root(dir.join("Steam"));
 
-    let other_sig = Signature { platform: Platform::Steam, id: "999999".into() };
+    let other_sig = Signature {
+        platform: Platform::Steam,
+        id: "999999".into(),
+    };
     let lnk_path = dir.join("Terraria.lnk");
     write_lnk(
         &lnk_path,
@@ -297,7 +361,11 @@ fn refuses_to_overwrite_an_lnk_owned_for_a_different_game() {
 
     assert_eq!(outcome.failed, 1);
     assert!(url_path.is_file());
-    assert_eq!(read_lnk(&lnk_path).unwrap().args, "-applaunch 999999", "the other game's shortcut must be untouched");
+    assert_eq!(
+        read_lnk(&lnk_path).unwrap().args,
+        "-applaunch 999999",
+        "the other game's shortcut must be untouched"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -325,9 +393,18 @@ fn a_failed_write_never_removes_the_original_url() {
     let outcome = convert_one(&legacy, &steam, &[], &dir.join("cache"), false);
 
     assert_eq!(outcome.failed, 1);
-    assert_eq!(outcome.has_icon, None, "no .lnk was written, so there is no icon to report on");
-    assert!(url_path.is_file(), "Named Risk 1: the .url must survive when write_lnk fails");
-    assert!(dest_as_dir.is_dir(), "the blocked destination is left exactly as it was");
+    assert_eq!(
+        outcome.has_icon, None,
+        "no .lnk was written, so there is no icon to report on"
+    );
+    assert!(
+        url_path.is_file(),
+        "Named Risk 1: the .url must survive when write_lnk fails"
+    );
+    assert!(
+        dest_as_dir.is_dir(),
+        "the blocked destination is left exactly as it was"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -347,9 +424,15 @@ fn dry_run_writes_no_lnk_and_removes_no_url() {
     let outcome = convert_one(&legacy, &steam, &[], &dir.join("cache"), true);
 
     assert_eq!(outcome.failed, 0);
-    assert_eq!(outcome.has_icon, None, "a dry run never resolves or reports on an icon");
+    assert_eq!(
+        outcome.has_icon, None,
+        "a dry run never resolves or reports on an icon"
+    );
     assert!(url_path.is_file(), "a dry run must not remove the .url");
-    assert!(!dir.join("Terraria.lnk").exists(), "a dry run must not write the .lnk");
+    assert!(
+        !dir.join("Terraria.lnk").exists(),
+        "a dry run must not write the .lnk"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

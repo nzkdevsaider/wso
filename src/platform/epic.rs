@@ -66,7 +66,10 @@ impl EpicProvider {
     }
 
     pub fn from_dirs(manifests_dir: PathBuf, launcher_exe: PathBuf) -> EpicProvider {
-        EpicProvider { manifests_dir, launcher_exe }
+        EpicProvider {
+            manifests_dir,
+            launcher_exe,
+        }
     }
 
     fn explorer() -> PathBuf {

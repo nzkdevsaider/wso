@@ -1,9 +1,8 @@
 const ILLEGAL: [char; 9] = ['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
 
 const RESERVED: [&str; 22] = [
-    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6",
-    "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6",
-    "lpt7", "lpt8", "lpt9",
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
 
 /// Turns a game title into a filename that NTFS accepts, preserving as much
@@ -11,7 +10,13 @@ const RESERVED: [&str; 22] = [
 pub fn sanitize_filename(name: &str) -> String {
     let replaced: String = name
         .chars()
-        .map(|c| if ILLEGAL.contains(&c) || (c as u32) < 0x20 { ' ' } else { c })
+        .map(|c| {
+            if ILLEGAL.contains(&c) || (c as u32) < 0x20 {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect();
 
     // Collapse runs of whitespace introduced by the replacement above.
@@ -214,7 +219,10 @@ mod tests {
     #[test]
     fn strips_illegal_characters() {
         assert_eq!(sanitize_filename("X4: Foundations"), "X4 Foundations");
-        assert_eq!(sanitize_filename("A/B\\C*D?E\"F<G>H|I"), "A B C D E F G H I");
+        assert_eq!(
+            sanitize_filename("A/B\\C*D?E\"F<G>H|I"),
+            "A B C D E F G H I"
+        );
     }
 
     #[test]
@@ -255,7 +263,9 @@ mod tests {
     #[test]
     fn unified_mode_uses_one_folder_for_every_platform() {
         let base = PathBuf::from(r"C:\Desktop");
-        let org = Organization::Unified { folder: "Games".into() };
+        let org = Organization::Unified {
+            folder: "Games".into(),
+        };
         assert_eq!(
             shortcut_dir(&base, &org, Platform::Steam),
             base.join("Games")
@@ -275,7 +285,9 @@ mod tests {
             base.join("Steam")
         );
 
-        let nested = Organization::PerPlatform { parent: Some("Games".into()) };
+        let nested = Organization::PerPlatform {
+            parent: Some("Games".into()),
+        };
         assert_eq!(
             shortcut_dir(&base, &nested, Platform::Epic),
             base.join("Games").join("Epic")
@@ -285,7 +297,9 @@ mod tests {
     #[test]
     fn folder_names_are_sanitized_too() {
         let base = PathBuf::from(r"C:\Desktop");
-        let org = Organization::Unified { folder: "My: Games".into() };
+        let org = Organization::Unified {
+            folder: "My: Games".into(),
+        };
         assert_eq!(
             shortcut_dir(&base, &org, Platform::Steam),
             base.join("My Games")
@@ -295,7 +309,9 @@ mod tests {
     #[test]
     fn per_platform_parent_folder_name_is_sanitized_too() {
         let base = PathBuf::from(r"C:\Desktop");
-        let org = Organization::PerPlatform { parent: Some("My: Games".into()) };
+        let org = Organization::PerPlatform {
+            parent: Some("My: Games".into()),
+        };
         assert_eq!(
             shortcut_dir(&base, &org, Platform::Steam),
             base.join("My Games").join("Steam")
@@ -353,7 +369,12 @@ mod tests {
         let base = PathBuf::from(r"C:\Desktop");
         assert_eq!(managed_dirs(&base, &Organization::Flat), vec![base.clone()]);
         assert_eq!(
-            managed_dirs(&base, &Organization::Unified { folder: "Games".into() }),
+            managed_dirs(
+                &base,
+                &Organization::Unified {
+                    folder: "Games".into()
+                }
+            ),
             vec![base.join("Games")]
         );
 
@@ -361,7 +382,9 @@ mod tests {
         // itself consults — rather than a hardcoded two-item list, so this
         // test keeps proving "every platform" instead of just "these two
         // platforms" if a third one is ever added.
-        let org = Organization::PerPlatform { parent: Some("Games".into()) };
+        let org = Organization::PerPlatform {
+            parent: Some("Games".into()),
+        };
         let expected: Vec<PathBuf> = all_platforms()
             .into_iter()
             .map(|platform| base.join("Games").join(platform.display_name()))
@@ -374,8 +397,16 @@ mod tests {
     fn resolves_per_user_known_folders() {
         let desktop = target_dir(Target::Desktop).unwrap();
         let start = target_dir(Target::StartMenu).unwrap();
-        assert!(desktop.is_dir(), "desktop should exist: {}", desktop.display());
-        assert!(start.is_dir(), "start menu should exist: {}", start.display());
+        assert!(
+            desktop.is_dir(),
+            "desktop should exist: {}",
+            desktop.display()
+        );
+        assert!(
+            start.is_dir(),
+            "start menu should exist: {}",
+            start.display()
+        );
         assert!(
             start.to_string_lossy().contains("AppData"),
             "must be the per-user Start Menu, got {}",

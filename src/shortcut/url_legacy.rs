@@ -65,7 +65,11 @@ pub fn parse(path: &Path, contents: &str) -> Option<LegacyUrl> {
         }
     }
 
-    Some(LegacyUrl { path: path.to_path_buf(), appid: appid?, icon_file })
+    Some(LegacyUrl {
+        path: path.to_path_buf(),
+        appid: appid?,
+        icon_file,
+    })
 }
 
 /// Scans `dirs` for `.url` files that parse as Steam shortcuts. A directory
@@ -205,7 +209,10 @@ IconFile=C:\\Program Files (x86)\\Steam\\steam\\games\\01b545c997d68f6c4ac18ccef
         .unwrap();
 
         let found = find(&[dir.clone()]);
-        assert!(found.is_empty(), "a web bookmark must never be treated as a Steam shortcut");
+        assert!(
+            found.is_empty(),
+            "a web bookmark must never be treated as a Steam shortcut"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -220,7 +227,11 @@ IconFile=C:\\Program Files (x86)\\Steam\\steam\\games\\01b545c997d68f6c4ac18ccef
         std::fs::write(dir.join("Terraria.url"), STEAM_URL).unwrap();
 
         let found = find(&[missing, dir.clone()]);
-        assert_eq!(found.len(), 1, "the readable directory's file must still be found");
+        assert_eq!(
+            found.len(),
+            1,
+            "the readable directory's file must still be found"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

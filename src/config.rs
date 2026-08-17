@@ -47,7 +47,9 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             targets: vec![Target::StartMenu],
-            organization: Organization::Unified { folder: "Games".into() },
+            organization: Organization::Unified {
+                folder: "Games".into(),
+            },
             platforms: vec![Platform::Steam, Platform::Epic],
             exclusions: Vec::new(),
             icon_overrides: HashMap::new(),
@@ -284,7 +286,12 @@ mod tests {
     fn defaults_are_sensible() {
         let c = Config::default();
         assert_eq!(c.targets, vec![Target::StartMenu]);
-        assert_eq!(c.organization, Organization::Unified { folder: "Games".into() });
+        assert_eq!(
+            c.organization,
+            Organization::Unified {
+                folder: "Games".into()
+            }
+        );
         assert_eq!(c.platforms, vec![Platform::Steam, Platform::Epic]);
         assert!(c.exclusions.is_empty());
     }
@@ -297,7 +304,9 @@ mod tests {
 
         let mut c = Config::default();
         c.targets = vec![Target::Desktop, Target::StartMenu];
-        c.organization = Organization::PerPlatform { parent: Some("Games".into()) };
+        c.organization = Organization::PerPlatform {
+            parent: Some("Games".into()),
+        };
         c.exclusions = vec!["steam:228980".into(), "Wallpaper Engine".into()];
         c.icon_overrides
             .insert("steam:440".into(), PathBuf::from(r"C:\icons\tf2.ico"));
@@ -351,7 +360,8 @@ mod tests {
         c.targets = vec![Target::Desktop];
         c.organization = Organization::Flat;
         c.exclusions = vec!["steam:1".into()];
-        c.icon_overrides.insert("epic:foo".into(), PathBuf::from(r"D:\a\b.ico"));
+        c.icon_overrides
+            .insert("epic:foo".into(), PathBuf::from(r"D:\a\b.ico"));
 
         save(&path, &c).unwrap();
         let first_bytes = std::fs::read_to_string(&path).unwrap();
@@ -366,8 +376,9 @@ mod tests {
 
     #[test]
     fn a_missing_file_yields_defaults() {
-        let (cfg, status) =
-            load(Path::new(r"C:\nope\wso_config_definitely_missing\config.toml"));
+        let (cfg, status) = load(Path::new(
+            r"C:\nope\wso_config_definitely_missing\config.toml",
+        ));
         assert_eq!(cfg, Config::default());
         assert_eq!(status, ConfigStatus::Missing);
     }

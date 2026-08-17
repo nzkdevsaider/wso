@@ -120,10 +120,17 @@ fn icon_for(legacy: &LegacyUrl, game: Option<&Game>, cache: &Path) -> Option<ico
         .icon_file
         .as_ref()
         .filter(|p| p.is_file())
-        .map(|p| icon::ResolvedIcon { path: p.clone(), index: 0 })
+        .map(|p| icon::ResolvedIcon {
+            path: p.clone(),
+            index: 0,
+        })
         .or_else(|| {
             game.and_then(|g| {
-                icon::resolve(&g.icon_candidates, cache, &format!("steam_{}", legacy.appid))
+                icon::resolve(
+                    &g.icon_candidates,
+                    cache,
+                    &format!("steam_{}", legacy.appid),
+                )
             })
         })
 }
@@ -188,7 +195,10 @@ pub fn convert_one(
         .unwrap_or("Game")
         .to_string();
 
-    let sig = Signature { platform: Platform::Steam, id: legacy.appid.clone() };
+    let sig = Signature {
+        platform: Platform::Steam,
+        id: legacy.appid.clone(),
+    };
     let game = games.iter().find(|g| g.id == legacy.appid);
     let dest = legacy.path.with_extension("lnk");
 
@@ -198,12 +208,18 @@ pub fn convert_one(
         } else {
             eprintln!("  skipped {name}: {} {reason}", dest.display());
         }
-        return ConvertOutcome { failed: 1, has_icon: None };
+        return ConvertOutcome {
+            failed: 1,
+            has_icon: None,
+        };
     }
 
     if dry_run {
         println!("  would convert {name} -> {}", dest.display());
-        return ConvertOutcome { failed: 0, has_icon: None };
+        return ConvertOutcome {
+            failed: 0,
+            has_icon: None,
+        };
     }
 
     let resolved = icon_for(legacy, game, cache);
@@ -224,16 +240,25 @@ pub fn convert_one(
                 } else {
                     println!("  converted {name} (no icon could be resolved for it)");
                 }
-                ConvertOutcome { failed: 0, has_icon: Some(has_icon) }
+                ConvertOutcome {
+                    failed: 0,
+                    has_icon: Some(has_icon),
+                }
             }
             Err(e) => {
                 eprintln!("  converted {name}, but could not remove the .url: {e}");
-                ConvertOutcome { failed: 1, has_icon: Some(has_icon) }
+                ConvertOutcome {
+                    failed: 1,
+                    has_icon: Some(has_icon),
+                }
             }
         },
         Err(e) => {
             eprintln!("  failed to convert {name}: {e}");
-            ConvertOutcome { failed: 1, has_icon: None }
+            ConvertOutcome {
+                failed: 1,
+                has_icon: None,
+            }
         }
     }
 }
@@ -313,7 +338,10 @@ mod tests {
     use crate::platform::Platform;
 
     fn sig(id: &str) -> Signature {
-        Signature { platform: Platform::Steam, id: id.into() }
+        Signature {
+            platform: Platform::Steam,
+            id: id.into(),
+        }
     }
 
     /// Nothing at `dest` yet: the ordinary case, always safe to proceed.

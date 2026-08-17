@@ -126,7 +126,11 @@ fn collect_games(cfg: &config::Config) -> Detection {
         );
     }
 
-    Detection { games, infos, failures }
+    Detection {
+        games,
+        infos,
+        failures,
+    }
 }
 
 /// Prints `detection`'s notes (informational to stdout, failures as
@@ -268,8 +272,10 @@ fn apply_with_confirmation(
     dry_run: bool,
     assume_yes: bool,
 ) -> ops::Summary {
-    let pending: Vec<&Action> =
-        actions.iter().filter(|a| !matches!(a, Action::Skip { .. })).collect();
+    let pending: Vec<&Action> = actions
+        .iter()
+        .filter(|a| !matches!(a, Action::Skip { .. }))
+        .collect();
 
     println!("\n{heading} — {} change(s) pending", pending.len());
     describe(actions);
@@ -284,7 +290,12 @@ fn apply_with_confirmation(
 
     let outcomes = ops::apply(actions, dry_run);
     for o in outcomes.iter().filter(|o| o.result.is_err()) {
-        eprintln!("  failed to {} {}: {}", o.action, o.name, o.result.as_ref().unwrap_err());
+        eprintln!(
+            "  failed to {} {}: {}",
+            o.action,
+            o.name,
+            o.result.as_ref().unwrap_err()
+        );
     }
     ops::summarize(&outcomes)
 }
@@ -364,7 +375,9 @@ fn candidate_organizations(cfg: &config::Config) -> Vec<Organization> {
     let mut folder_names = vec!["Games".to_string()];
     let configured = match &cfg.organization {
         Organization::Unified { folder } => Some(folder.clone()),
-        Organization::PerPlatform { parent: Some(parent) } => Some(parent.clone()),
+        Organization::PerPlatform {
+            parent: Some(parent),
+        } => Some(parent.clone()),
         Organization::PerPlatform { parent: None } | Organization::Flat => None,
     };
     if let Some(name) = configured {
@@ -373,9 +386,14 @@ fn candidate_organizations(cfg: &config::Config) -> Vec<Organization> {
         }
     }
 
-    let mut orgs = vec![Organization::Flat, Organization::PerPlatform { parent: None }];
+    let mut orgs = vec![
+        Organization::Flat,
+        Organization::PerPlatform { parent: None },
+    ];
     for name in folder_names {
-        orgs.push(Organization::Unified { folder: name.clone() });
+        orgs.push(Organization::Unified {
+            folder: name.clone(),
+        });
         orgs.push(Organization::PerPlatform { parent: Some(name) });
     }
     orgs
@@ -448,7 +466,10 @@ pub fn status(cli: &Cli) -> i32 {
         let owned = ops::scan_owned(&ops::managed_dirs(&base, &cfg.organization));
         let desired = ops::build_desired(&games, &cfg, &base, &cache);
         let actions = plan(&desired, &owned);
-        let pending = actions.iter().filter(|a| !matches!(a, Action::Skip { .. })).count();
+        let pending = actions
+            .iter()
+            .filter(|a| !matches!(a, Action::Skip { .. }))
+            .count();
         println!(
             "\n{}: {} managed shortcut(s), {} out of sync",
             target.label(),
@@ -502,11 +523,15 @@ mod tests {
     #[test]
     fn candidate_organizations_always_includes_the_currently_configured_layout() {
         let mut cfg = config::Config::default();
-        cfg.organization = Organization::PerPlatform { parent: Some("Juegos".into()) };
+        cfg.organization = Organization::PerPlatform {
+            parent: Some("Juegos".into()),
+        };
 
         let orgs = candidate_organizations(&cfg);
         assert!(
-            orgs.contains(&Organization::PerPlatform { parent: Some("Juegos".into()) }),
+            orgs.contains(&Organization::PerPlatform {
+                parent: Some("Juegos".into())
+            }),
             "expected the configured PerPlatform(\"Juegos\") layout among {orgs:?}"
         );
     }
@@ -519,15 +544,21 @@ mod tests {
     #[test]
     fn candidate_organizations_includes_the_default_games_folder_even_when_not_configured() {
         let mut cfg = config::Config::default();
-        cfg.organization = Organization::PerPlatform { parent: Some("Juegos".into()) };
+        cfg.organization = Organization::PerPlatform {
+            parent: Some("Juegos".into()),
+        };
 
         let orgs = candidate_organizations(&cfg);
         assert!(
-            orgs.contains(&Organization::Unified { folder: "Games".into() }),
+            orgs.contains(&Organization::Unified {
+                folder: "Games".into()
+            }),
             "expected the default Unified(\"Games\") layout among {orgs:?}"
         );
         assert!(
-            orgs.contains(&Organization::PerPlatform { parent: Some("Games".into()) }),
+            orgs.contains(&Organization::PerPlatform {
+                parent: Some("Games".into())
+            }),
             "expected the default PerPlatform(\"Games\") layout among {orgs:?}"
         );
     }
@@ -550,7 +581,9 @@ mod tests {
     #[test]
     fn candidate_organizations_does_not_duplicate_when_configured_name_is_the_default() {
         let mut cfg = config::Config::default();
-        cfg.organization = Organization::Unified { folder: "Games".into() };
+        cfg.organization = Organization::Unified {
+            folder: "Games".into(),
+        };
 
         let orgs = candidate_organizations(&cfg);
         let games_unified_count = orgs
@@ -587,8 +620,14 @@ mod tests {
         );
 
         assert!(games.is_empty());
-        assert!(infos.is_empty(), "a read failure must never be reported as an install note");
-        assert_eq!(failures, vec!["Steam is installed but could not be read: disk is unreadable"]);
+        assert!(
+            infos.is_empty(),
+            "a read failure must never be reported as an install note"
+        );
+        assert_eq!(
+            failures,
+            vec!["Steam is installed but could not be read: disk is unreadable"]
+        );
     }
 
     /// The other half of the same distinction: a platform that was never
@@ -609,7 +648,10 @@ mod tests {
             &mut failures,
         );
 
-        assert_eq!(infos, vec!["Epic Games Launcher is not installed; skipping."]);
+        assert_eq!(
+            infos,
+            vec!["Epic Games Launcher is not installed; skipping."]
+        );
         assert!(failures.is_empty());
     }
 
@@ -644,7 +686,11 @@ mod tests {
     fn exit_code_collapses_any_positive_failure_count_to_one_and_never_to_two() {
         assert_eq!(exit_code(0), 0);
         assert_eq!(exit_code(1), 1);
-        assert_eq!(exit_code(2), 1, "two failures must still be exit code 1, not 2");
+        assert_eq!(
+            exit_code(2),
+            1,
+            "two failures must still be exit code 1, not 2"
+        );
         assert_eq!(exit_code(42), 1);
     }
 
@@ -657,15 +703,16 @@ mod tests {
     /// Windows known-folder lookup, which cannot be forced from a test.
     #[test]
     fn resolve_bases_keeps_the_resolved_target_and_names_the_unresolved_one() {
-        let (resolved, unresolved) = resolve_bases(
-            [Target::Desktop, Target::StartMenu],
-            |t| match t {
+        let (resolved, unresolved) =
+            resolve_bases([Target::Desktop, Target::StartMenu], |t| match t {
                 Target::Desktop => Ok(PathBuf::from(r"C:\Desktop")),
                 Target::StartMenu => Err(LayoutError::UnknownFolder("boom".into())),
-            },
-        );
+            });
 
-        assert_eq!(resolved, vec![(Target::Desktop, PathBuf::from(r"C:\Desktop"))]);
+        assert_eq!(
+            resolved,
+            vec![(Target::Desktop, PathBuf::from(r"C:\Desktop"))]
+        );
         assert_eq!(unresolved.len(), 1);
         assert_eq!(unresolved[0].0, Target::StartMenu);
         assert!(
@@ -679,10 +726,9 @@ mod tests {
     /// unresolved.
     #[test]
     fn resolve_bases_reports_no_unresolved_targets_when_everything_resolves() {
-        let (resolved, unresolved) =
-            resolve_bases([Target::Desktop, Target::StartMenu], |t| {
-                Ok(PathBuf::from(r"C:\Base").join(t.label()))
-            });
+        let (resolved, unresolved) = resolve_bases([Target::Desktop, Target::StartMenu], |t| {
+            Ok(PathBuf::from(r"C:\Base").join(t.label()))
+        });
         assert_eq!(resolved.len(), 2);
         assert!(unresolved.is_empty());
     }
@@ -694,8 +740,10 @@ mod tests {
     /// printed warning.
     #[test]
     fn warn_unresolved_counts_each_unresolved_target_exactly_once() {
-        let unresolved =
-            vec![(Target::StartMenu, "could not locate a Windows known folder: boom".to_string())];
+        let unresolved = vec![(
+            Target::StartMenu,
+            "could not locate a Windows known folder: boom".to_string(),
+        )];
         assert_eq!(warn_unresolved(&unresolved, "scanned"), 1);
         assert_eq!(warn_unresolved(&[], "scanned"), 0);
     }
@@ -708,15 +756,25 @@ mod tests {
     /// modify the user's shortcuts.
     #[test]
     fn summary_line_uses_conditional_wording_under_dry_run() {
-        let s = ops::Summary { created: 3, updated: 1, ..Default::default() };
+        let s = ops::Summary {
+            created: 3,
+            updated: 1,
+            ..Default::default()
+        };
 
         let dry = summary_line(&s, true);
         assert!(dry.contains("3 would be created"), "got: {dry}");
         assert!(dry.contains("1 would be updated"), "got: {dry}");
-        assert!(!dry.contains("3 created,"), "must not read as if it already happened: {dry}");
+        assert!(
+            !dry.contains("3 created,"),
+            "must not read as if it already happened: {dry}"
+        );
 
         let real = summary_line(&s, false);
         assert!(real.contains("3 created,"), "got: {real}");
-        assert!(!real.contains("would be"), "a real run must not hedge: {real}");
+        assert!(
+            !real.contains("would be"),
+            "a real run must not hedge: {real}"
+        );
     }
 }

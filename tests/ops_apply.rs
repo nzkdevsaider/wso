@@ -31,7 +31,10 @@ fn scan_owned_claims_only_the_signed_shortcut_and_skips_everything_else() {
     let dir = common::unique_temp_dir("scan_owned");
     std::fs::create_dir_all(&dir).unwrap();
 
-    let sig = Signature { platform: Platform::Steam, id: "105600".into() };
+    let sig = Signature {
+        platform: Platform::Steam,
+        id: "105600".into(),
+    };
     write_lnk(
         &dir.join("Terraria.lnk"),
         &LnkData {
@@ -87,7 +90,10 @@ fn scan_owned_claims_a_signed_shortcut_with_an_uppercase_extension() {
     let dir = common::unique_temp_dir("uppercase_extension");
     std::fs::create_dir_all(&dir).unwrap();
 
-    let sig = Signature { platform: Platform::Steam, id: "440".into() };
+    let sig = Signature {
+        platform: Platform::Steam,
+        id: "440".into(),
+    };
     write_lnk(
         &dir.join("Team Fortress 2.LNK"),
         &LnkData {
@@ -101,7 +107,11 @@ fn scan_owned_claims_a_signed_shortcut_with_an_uppercase_extension() {
     .unwrap();
 
     let owned = scan_owned(&[dir.clone()]);
-    assert_eq!(owned.len(), 1, "an uppercase .LNK extension must still be claimed");
+    assert_eq!(
+        owned.len(),
+        1,
+        "an uppercase .LNK extension must still be claimed"
+    );
     assert_eq!(owned[0].sig, sig);
 
     std::fs::remove_dir_all(&dir).ok();
@@ -119,7 +129,10 @@ fn dry_run_creates_nothing_including_the_parent_directory() {
     let target = nested.join("Game.lnk");
 
     let actions = vec![Action::Create(DesiredShortcut {
-        sig: Signature { platform: Platform::Steam, id: "1".into() },
+        sig: Signature {
+            platform: Platform::Steam,
+            id: "1".into(),
+        },
         path: target.clone(),
         lnk: LnkData {
             target: system_exe(),
@@ -132,7 +145,10 @@ fn dry_run_creates_nothing_including_the_parent_directory() {
 
     let outcomes = apply(&actions, true);
     assert_eq!(outcomes.len(), 1);
-    assert!(!dir.exists(), "dry run must not create even the base directory");
+    assert!(
+        !dir.exists(),
+        "dry run must not create even the base directory"
+    );
     assert!(!target.exists(), "dry run must not write");
 
     let outcomes = apply(&actions, false);
@@ -189,7 +205,10 @@ fn one_failed_action_does_not_stop_the_rest_of_the_batch() {
 
     let actions = vec![
         Action::Create(DesiredShortcut {
-            sig: Signature { platform: Platform::Steam, id: "1".into() },
+            sig: Signature {
+                platform: Platform::Steam,
+                id: "1".into(),
+            },
             path: unwritable.clone(),
             lnk: LnkData {
                 target: system_exe(),
@@ -200,7 +219,10 @@ fn one_failed_action_does_not_stop_the_rest_of_the_batch() {
             },
         }),
         Action::Create(DesiredShortcut {
-            sig: Signature { platform: Platform::Steam, id: "2".into() },
+            sig: Signature {
+                platform: Platform::Steam,
+                id: "2".into(),
+            },
             path: good.clone(),
             lnk: LnkData {
                 target: system_exe(),
@@ -215,7 +237,10 @@ fn one_failed_action_does_not_stop_the_rest_of_the_batch() {
     let outcomes = apply(&actions, false);
     assert_eq!(outcomes.len(), 2);
     assert!(!unwritable.exists());
-    assert!(good.is_file(), "the second action must still run despite the first failing");
+    assert!(
+        good.is_file(),
+        "the second action must still run despite the first failing"
+    );
 
     let summary = summarize(&outcomes);
     assert_eq!(summary.failed, 1);
@@ -256,11 +281,20 @@ fn move_reports_failure_when_the_old_path_cannot_be_removed_but_keeps_the_new_fi
 
     let outcomes = apply(&actions, false);
     assert_eq!(outcomes.len(), 1);
-    assert!(to.is_file(), "the new shortcut must exist even though cleanup of the old path failed");
-    assert!(from.is_dir(), "the blocked old path is left in place, not silently ignored");
+    assert!(
+        to.is_file(),
+        "the new shortcut must exist even though cleanup of the old path failed"
+    );
+    assert!(
+        from.is_dir(),
+        "the blocked old path is left in place, not silently ignored"
+    );
 
     let summary = summarize(&outcomes);
-    assert_eq!(summary.failed, 1, "an incomplete move must be reported as a failure");
+    assert_eq!(
+        summary.failed, 1,
+        "an incomplete move must be reported as a failure"
+    );
     assert_eq!(summary.moved, 0);
 
     std::fs::remove_dir_all(&dir).ok();

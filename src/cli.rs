@@ -99,14 +99,16 @@ impl Cli {
             cfg.organization = match o {
                 OrganizeArg::Flat => Organization::Flat,
                 OrganizeArg::Unified => Organization::Unified { folder },
-                OrganizeArg::PerPlatform => {
-                    Organization::PerPlatform { parent: self.folder.clone() }
-                }
+                OrganizeArg::PerPlatform => Organization::PerPlatform {
+                    parent: self.folder.clone(),
+                },
             };
         } else if let Some(folder) = &self.folder {
             // A folder name on its own renames the existing unified folder.
             if let Organization::Unified { .. } = cfg.organization {
-                cfg.organization = Organization::Unified { folder: folder.clone() };
+                cfg.organization = Organization::Unified {
+                    folder: folder.clone(),
+                };
             }
         }
         if let Some(names) = &self.platforms {
@@ -135,9 +137,18 @@ mod tests {
 
     #[test]
     fn parses_every_subcommand() {
-        assert_eq!(Cli::parse_from(["wso", "sync"]).effective_command(), Command::Sync);
-        assert_eq!(Cli::parse_from(["wso", "clean"]).effective_command(), Command::Clean);
-        assert_eq!(Cli::parse_from(["wso", "status"]).effective_command(), Command::Status);
+        assert_eq!(
+            Cli::parse_from(["wso", "sync"]).effective_command(),
+            Command::Sync
+        );
+        assert_eq!(
+            Cli::parse_from(["wso", "clean"]).effective_command(),
+            Command::Clean
+        );
+        assert_eq!(
+            Cli::parse_from(["wso", "status"]).effective_command(),
+            Command::Status
+        );
         assert_eq!(
             Cli::parse_from(["wso", "migrate"]).effective_command(),
             Command::Migrate
@@ -147,7 +158,13 @@ mod tests {
     #[test]
     fn parses_organization_flags() {
         let cli = Cli::parse_from([
-            "wso", "sync", "--organize", "per-platform", "--folder", "Juegos", "--yes",
+            "wso",
+            "sync",
+            "--organize",
+            "per-platform",
+            "--folder",
+            "Juegos",
+            "--yes",
         ]);
         assert_eq!(cli.organize, Some(OrganizeArg::PerPlatform));
         assert_eq!(cli.folder.as_deref(), Some("Juegos"));
@@ -158,14 +175,22 @@ mod tests {
     #[test]
     fn flags_override_config() {
         let cli = Cli::parse_from([
-            "wso", "--target", "desktop", "--organize", "unified", "--folder", "Games",
+            "wso",
+            "--target",
+            "desktop",
+            "--organize",
+            "unified",
+            "--folder",
+            "Games",
         ]);
         let mut cfg = crate::config::Config::default();
         cli.apply_overrides(&mut cfg);
         assert_eq!(cfg.targets, vec![crate::layout::Target::Desktop]);
         assert_eq!(
             cfg.organization,
-            crate::layout::Organization::Unified { folder: "Games".into() }
+            crate::layout::Organization::Unified {
+                folder: "Games".into()
+            }
         );
     }
 

@@ -54,7 +54,11 @@ impl Value {
 /// Parses Steam's text keyvalues format, as used by `libraryfolders.vdf` and
 /// `appmanifest_*.acf`. The binary VDF variant is deliberately not supported.
 pub fn parse(input: &str) -> Result<Value, VdfError> {
-    let mut p = Parser { bytes: input.as_bytes(), pos: 0, depth: 0 };
+    let mut p = Parser {
+        bytes: input.as_bytes(),
+        pos: 0,
+        depth: 0,
+    };
     let entries = p.parse_entries(true)?;
     Ok(Value::Obj(entries))
 }
@@ -112,9 +116,7 @@ impl<'a> Parser<'a> {
                             entries.push((key, Value::Obj(obj)));
                         }
                         None => return Err(VdfError::UnexpectedEnd),
-                        Some(c) => {
-                            return Err(VdfError::UnexpectedToken((c as char).to_string()))
-                        }
+                        Some(c) => return Err(VdfError::UnexpectedToken((c as char).to_string())),
                     }
                 }
                 Some(c) => return Err(VdfError::UnexpectedToken((c as char).to_string())),
@@ -151,7 +153,8 @@ impl<'a> Parser<'a> {
                             let width = utf8_width(lead);
                             let end = std::cmp::min(self.pos + width, self.bytes.len());
                             let window = &self.bytes[self.pos..end];
-                            let s = std::str::from_utf8(window).map_err(|_| VdfError::UnexpectedEnd)?;
+                            let s =
+                                std::str::from_utf8(window).map_err(|_| VdfError::UnexpectedEnd)?;
                             let ch = s.chars().next().ok_or(VdfError::UnexpectedEnd)?;
                             out.push(ch);
                             self.pos += ch.len_utf8();
@@ -238,7 +241,10 @@ mod tests {
             root.get("1").unwrap().get("path").unwrap().as_str(),
             Some(r"D:\SteamLibrary")
         );
-        assert_eq!(root.get("1").unwrap().get("apps").unwrap().entries().len(), 2);
+        assert_eq!(
+            root.get("1").unwrap().get("apps").unwrap().entries().len(),
+            2
+        );
     }
 
     #[test]
@@ -267,7 +273,10 @@ mod tests {
 
     #[test]
     fn reports_unterminated_object() {
-        assert!(matches!(parse("\"root\"\n{\n"), Err(VdfError::UnexpectedEnd)));
+        assert!(matches!(
+            parse("\"root\"\n{\n"),
+            Err(VdfError::UnexpectedEnd)
+        ));
     }
 
     #[test]
@@ -294,8 +303,8 @@ mod tests {
         // Build input string with an actual backslash before the UTF-8 character.
         // This tests the escape branch's UTF-8 handling.
         let mut input = String::from("\"AppState\"\n{\n\"name\"\t\"Caf");
-        input.push('\\');  // Add the backslash that the parser will encounter
-        input.push_str("é\"\n}\n");  // Add the multi-byte character
+        input.push('\\'); // Add the backslash that the parser will encounter
+        input.push_str("é\"\n}\n"); // Add the multi-byte character
         let v = parse(&input).unwrap();
         let state = v.get("AppState").unwrap();
         // The escape branch decodes the multi-byte character, consuming the backslash.
@@ -320,12 +329,22 @@ mod tests {
              \"block1\" { \"key\" \"val1\" }\n\
              \"block2\" { \"key\" \"val2\" }\n\
              \"block3\" { \"key\" \"val3\" }\n\
-             }\n"
-        ).unwrap();
+             }\n",
+        )
+        .unwrap();
         let root = v.get("root").unwrap();
         assert_eq!(root.entries().len(), 3);
-        assert_eq!(root.get("block1").unwrap().get("key").unwrap().as_str(), Some("val1"));
-        assert_eq!(root.get("block2").unwrap().get("key").unwrap().as_str(), Some("val2"));
-        assert_eq!(root.get("block3").unwrap().get("key").unwrap().as_str(), Some("val3"));
+        assert_eq!(
+            root.get("block1").unwrap().get("key").unwrap().as_str(),
+            Some("val1")
+        );
+        assert_eq!(
+            root.get("block2").unwrap().get("key").unwrap().as_str(),
+            Some("val2")
+        );
+        assert_eq!(
+            root.get("block3").unwrap().get("key").unwrap().as_str(),
+            Some("val3")
+        );
     }
 }

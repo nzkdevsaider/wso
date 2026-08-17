@@ -70,9 +70,9 @@ pub fn apply_answers(cfg: &mut Config, a: Answers) {
     cfg.targets = a.targets;
     cfg.organization = match a.organization {
         OrgChoice::Flat => Organization::Flat,
-        OrgChoice::Unified => {
-            Organization::Unified { folder: a.folder.unwrap_or_else(|| "Games".into()) }
-        }
+        OrgChoice::Unified => Organization::Unified {
+            folder: a.folder.unwrap_or_else(|| "Games".into()),
+        },
         OrgChoice::PerPlatform => Organization::PerPlatform { parent: a.folder },
     };
 }
@@ -83,11 +83,17 @@ pub fn apply_answers(cfg: &mut Config, a: Answers) {
 const ORGANIZATION_OPTIONS: [(&str, OrgChoice); 3] = [
     ("One folder for all games", OrgChoice::Unified),
     ("One folder per platform", OrgChoice::PerPlatform),
-    ("No folder — place them directly in the target", OrgChoice::Flat),
+    (
+        "No folder — place them directly in the target",
+        OrgChoice::Flat,
+    ),
 ];
 
 fn organization_labels() -> Vec<&'static str> {
-    ORGANIZATION_OPTIONS.iter().map(|(label, _)| *label).collect()
+    ORGANIZATION_OPTIONS
+        .iter()
+        .map(|(label, _)| *label)
+        .collect()
 }
 
 /// Looks `choice` up in `ORGANIZATION_OPTIONS` rather than trusting it blindly.
@@ -134,7 +140,10 @@ fn resolve_targets(choice: &str) -> Result<Vec<Target>, Cancelled> {
 /// the same guard the crate already relies on for `layout::managed_dirs`,
 /// shared here instead of re-implemented (and left unguarded) a second time.
 fn platform_table() -> Vec<(&'static str, Platform)> {
-    crate::layout::all_platforms().into_iter().map(|p| (p.display_name(), p)).collect()
+    crate::layout::all_platforms()
+        .into_iter()
+        .map(|p| (p.display_name(), p))
+        .collect()
 }
 
 fn platform_labels() -> Vec<&'static str> {
@@ -230,7 +239,15 @@ pub fn run(cfg: &mut Config) -> Result<(), Cancelled> {
 
     let start_menu_chosen = targets.contains(&Target::StartMenu);
 
-    apply_answers(cfg, Answers { platforms, targets, organization, folder });
+    apply_answers(
+        cfg,
+        Answers {
+            platforms,
+            targets,
+            organization,
+            folder,
+        },
+    );
 
     if start_menu_chosen {
         println!(
@@ -265,7 +282,9 @@ mod tests {
         assert_eq!(cfg.targets.len(), 2);
         assert_eq!(
             cfg.organization,
-            Organization::PerPlatform { parent: Some("Juegos".into()) }
+            Organization::PerPlatform {
+                parent: Some("Juegos".into())
+            }
         );
     }
 
@@ -298,7 +317,9 @@ mod tests {
         );
         assert_eq!(
             cfg.organization,
-            Organization::Unified { folder: "Games".into() }
+            Organization::Unified {
+                folder: "Games".into()
+            }
         );
     }
 
@@ -351,7 +372,8 @@ mod tests {
         use std::path::PathBuf;
 
         let mut cfg = Config::default();
-        cfg.icon_overrides.insert("steam:440".into(), PathBuf::from(r"C:\icons\tf2.ico"));
+        cfg.icon_overrides
+            .insert("steam:440".into(), PathBuf::from(r"C:\icons\tf2.ico"));
         apply_answers(
             &mut cfg,
             Answers {
@@ -384,7 +406,10 @@ mod tests {
     /// default `OrgChoice`.
     #[test]
     fn resolve_organization_rejects_a_label_absent_from_the_table() {
-        assert_eq!(resolve_organization("Some option nobody offered"), Err(Cancelled));
+        assert_eq!(
+            resolve_organization("Some option nobody offered"),
+            Err(Cancelled)
+        );
     }
 
     /// Same guarantee as `resolve_organization_maps_each_table_label_to_its_own_choice`,
@@ -407,7 +432,10 @@ mod tests {
     /// is proved here by listing them checked in reverse.
     #[test]
     fn resolve_platforms_returns_checked_platforms_in_table_order_regardless_of_input_order() {
-        assert_eq!(resolve_platforms(&["Epic", "Steam"]), vec![Platform::Steam, Platform::Epic]);
+        assert_eq!(
+            resolve_platforms(&["Epic", "Steam"]),
+            vec![Platform::Steam, Platform::Epic]
+        );
         assert_eq!(resolve_platforms(&["Epic"]), vec![Platform::Epic]);
     }
 

@@ -52,10 +52,16 @@ pub fn resolve(candidates: &[IconCandidate], cache_dir: &Path, key: &str) -> Opt
                 }
                 let dest = cache_dir.join(format!("{key}.ico"));
                 if dest.is_file() {
-                    return Some(ResolvedIcon { path: dest, index: 0 });
+                    return Some(ResolvedIcon {
+                        path: dest,
+                        index: 0,
+                    });
                 }
                 if convert::png_to_ico(src, &dest).is_ok() {
-                    return Some(ResolvedIcon { path: dest, index: 0 });
+                    return Some(ResolvedIcon {
+                        path: dest,
+                        index: 0,
+                    });
                 }
             }
             IconCandidate::Fallback(path) => {
