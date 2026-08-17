@@ -7,7 +7,7 @@ use winshortcuts_organizer::ops::{apply, scan_owned, summarize};
 use winshortcuts_organizer::plan::{Action, DesiredShortcut};
 use winshortcuts_organizer::platform::Platform;
 use winshortcuts_organizer::shortcut::{
-    signature::{encode, Signature},
+    signature::{decode, encode, Signature},
     writer::{read_lnk, write_lnk, ComGuard},
     LnkData,
 };
@@ -496,6 +496,176 @@ fn move_refuses_to_overwrite_a_foreign_shortcut_at_the_destination() {
     let summary = summarize(&outcomes);
     assert_eq!(summary.failed, 1);
     assert_eq!(summary.moved, 0);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `Move` is two steps — write the new file, then remove the old one — and
+/// the second step was guarded by `from != to`, a byte-exact comparison on a
+/// case-insensitive filesystem. When the two spellings name the *same* file,
+/// `write_lnk` overwrites it in place and `remove_file(from)` then deletes
+/// exactly what was just written. The run reports `1 moved, 0 failed`, and
+/// the shortcut is gone.
+///
+/// The folder-case route became reachable with the filesystem-derived scan:
+/// `ops::scan_dirs` returns the on-disk spelling (`Mis Juegos`) while
+/// `build_desired` uses the configured one (`mis juegos`), so `plan()` emits
+/// a `Move` between two names for one directory. The collision gate cannot
+/// catch this — it correctly reports `OwnedBySame`, and the unguarded
+/// operation is the deletion, not the write.
+#[test]
+fn a_move_between_two_spellings_of_the_same_folder_keeps_the_shortcut() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("move_same_folder_other_case");
+    let on_disk = dir.join("Mis Juegos");
+    std::fs::create_dir_all(&on_disk).unwrap();
+
+    let sig = Signature {
+        platform: Platform::Steam,
+        id: "105600".into(),
+    };
+    let from = on_disk.join("Terraria.lnk");
+    let lnk = LnkData {
+        target: system_exe(),
+        args: "-applaunch 105600".into(),
+        working_dir: None,
+        icon: None,
+        description: encode("Terraria", &sig),
+    };
+    write_lnk(&from, &lnk).unwrap();
+
+    // The same directory, spelled the way the configuration now holds it.
+    let to = dir.join("mis juegos").join("Terraria.lnk");
+    assert_ne!(from, to, "the two paths must differ as strings");
+
+    let outcomes = apply(
+        &[Action::Move {
+            from: from.clone(),
+            to: to.clone(),
+            lnk,
+        }],
+        false,
+    );
+
+    assert!(
+        to.is_file(),
+        "the shortcut must survive a move between two spellings of its own folder"
+    );
+    assert_eq!(
+        decode(&read_lnk(&to).unwrap().description),
+        Some(sig),
+        "and must still be the shortcut this tool owns"
+    );
+    assert_eq!(
+        std::fs::read_dir(&on_disk).unwrap().count(),
+        1,
+        "exactly one shortcut, neither deleted nor duplicated"
+    );
+
+    let summary = summarize(&outcomes);
+    assert_eq!(summary.failed, 0);
+    assert_eq!(summary.moved, 1);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The same defect reached through the filename rather than the folder, which
+/// is not new: a user who renames `Terraria.lnk` to `TERRARIA.lnk` has always
+/// been able to reach it. One file on disk, two spellings, and the deletion
+/// removes the file the write just produced.
+#[test]
+fn a_move_between_two_spellings_of_the_same_filename_keeps_the_shortcut() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("move_same_file_other_case");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let sig = Signature {
+        platform: Platform::Steam,
+        id: "105600".into(),
+    };
+    let from = dir.join("Terraria.lnk");
+    let lnk = LnkData {
+        target: system_exe(),
+        args: "-applaunch 105600".into(),
+        working_dir: None,
+        icon: None,
+        description: encode("Terraria", &sig),
+    };
+    write_lnk(&from, &lnk).unwrap();
+
+    let to = dir.join("TERRARIA.lnk");
+    assert_ne!(from, to, "the two paths must differ as strings");
+
+    let outcomes = apply(
+        &[Action::Move {
+            from: from.clone(),
+            to: to.clone(),
+            lnk,
+        }],
+        false,
+    );
+
+    assert!(to.is_file(), "the shortcut must survive");
+    assert_eq!(decode(&read_lnk(&to).unwrap().description), Some(sig));
+    assert_eq!(
+        std::fs::read_dir(&dir).unwrap().count(),
+        1,
+        "exactly one shortcut, neither deleted nor duplicated"
+    );
+
+    let summary = summarize(&outcomes);
+    assert_eq!(summary.failed, 0);
+    assert_eq!(summary.moved, 1);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The guard on the two tests above: skipping the deletion is only correct
+/// when the two paths are the same file. A genuine relocation must still
+/// leave nothing behind, or a mode switch would accumulate a duplicate for
+/// every game instead of moving it — which is the defect C2 exists to fix.
+/// A `remove_file` deleted outright would pass both tests above and fail this
+/// one.
+#[test]
+fn a_move_between_genuinely_different_paths_still_removes_the_source() {
+    let _com = ComGuard::new().unwrap();
+    let dir = common::unique_temp_dir("move_different_paths_removes_source");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let sig = Signature {
+        platform: Platform::Steam,
+        id: "105600".into(),
+    };
+    let from = dir.join("Terraria.lnk");
+    let lnk = LnkData {
+        target: system_exe(),
+        args: "-applaunch 105600".into(),
+        working_dir: None,
+        icon: None,
+        description: encode("Terraria", &sig),
+    };
+    write_lnk(&from, &lnk).unwrap();
+
+    let to = dir.join("Mis Juegos").join("Terraria.lnk");
+
+    let outcomes = apply(
+        &[Action::Move {
+            from: from.clone(),
+            to: to.clone(),
+            lnk,
+        }],
+        false,
+    );
+
+    assert!(to.is_file(), "the shortcut must exist at its new path");
+    assert!(
+        !from.exists(),
+        "a genuine relocation must not leave the original behind"
+    );
+
+    let summary = summarize(&outcomes);
+    assert_eq!(summary.failed, 0);
+    assert_eq!(summary.moved, 1);
 
     std::fs::remove_dir_all(&dir).ok();
 }

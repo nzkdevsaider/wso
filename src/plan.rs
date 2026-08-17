@@ -118,7 +118,12 @@ fn path_key(p: &Path) -> String {
 ///
 /// Deliberately not applied to `path`: where a shortcut *file* lives decides
 /// `Move` and `DeleteOrphan`, and those must keep comparing exactly.
-fn same_path(a: &Path, b: &Path) -> bool {
+///
+/// `pub(crate)` so `ops` can reuse the same fold when it decides whether a
+/// `Move`'s two endpoints are really one file (`ops::names_the_same_file`).
+/// One definition of "these two spellings mean the same path", not two that
+/// could drift.
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
     path_key(a) == path_key(b)
 }
 
@@ -450,8 +455,16 @@ mod tests {
     /// would be the same directory on Windows, but folding them here would
     /// mean `plan()` silently deciding not to relocate a shortcut the user
     /// asked to relocate — and the same fold applied to `DeleteOrphan` would
-    /// change which file gets deleted. A redundant `Move` is cheap; guessing
-    /// wrong about a deletion is not.
+    /// change which file gets deleted. Guessing wrong about a deletion is the
+    /// expensive mistake, so `plan()` stays literal and leaves the question to
+    /// the layer that can actually ask the filesystem.
+    ///
+    /// This test used to claim, flatly, that "a redundant `Move` is cheap".
+    /// It was not: `ops::apply` guarded its cleanup step with a byte-exact
+    /// `from != to`, so a `Move` between two spellings of one file overwrote
+    /// that file and then deleted it, reporting success. The claim is true
+    /// only because `ops::names_the_same_file` now makes it true — which is
+    /// where a redundant `Move` is made cheap, not here.
     #[test]
     fn a_destination_path_differing_only_in_case_is_still_a_move() {
         let d = [desired("440", r"C:\Desktop\TF2.lnk", "tf2.exe")];

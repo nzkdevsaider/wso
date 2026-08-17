@@ -284,6 +284,46 @@ fn move_signature(lnk: &LnkData) -> Result<crate::shortcut::signature::Signature
     })
 }
 
+/// Whether `a` and `b` name one and the same file on disk.
+///
+/// `Move` is two steps — write the new file, then remove the old one — and
+/// the removal used to be guarded by a byte-exact `from != to`. On a
+/// case-insensitive filesystem that is not the same question. When the two
+/// spellings name one file, `write_lnk(to, ..)` overwrites it in place and
+/// `remove_file(from)` then deletes exactly what was just written, while the
+/// run cheerfully reports `1 moved, 0 failed`. Two routes reach it: a user
+/// renaming `Terraria.lnk` to `TERRARIA.lnk`, and — since `scan_dirs` started
+/// reading the disk — a configured folder name whose case differs from the
+/// folder actually there, because the scan reports the on-disk spelling while
+/// `build_desired` uses the configured one.
+///
+/// `shortcut::collision` cannot catch this: it correctly answers
+/// `OwnedBySame`, and the unguarded operation is the deletion, not the write.
+///
+/// Two tests, cheapest first. The textual fold is `plan::same_path`, the same
+/// one `plan` uses for targets, and it answers even when neither path exists.
+/// `canonicalize` then catches aliases no string comparison can see — `..`
+/// segments, junctions, 8.3 short names — but only when both paths resolve,
+/// so it is an additional way to say "same", never a way to overrule the
+/// fold.
+///
+/// Both tests are deliberately biased towards answering "same", because the
+/// two mistakes are not symmetric. Wrongly saying "same" skips a deletion and
+/// leaves a duplicate, which the next run reconciles — `plan` has
+/// `SkipReason::DuplicateSignature` and its orphan handling for exactly that.
+/// Wrongly saying "different" deletes the shortcut. This lives in `ops`, the
+/// I/O layer, precisely because answering it properly means asking the
+/// filesystem; `plan` must stay pure.
+fn names_the_same_file(a: &Path, b: &Path) -> bool {
+    if crate::plan::same_path(a, b) {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Applies actions one at a time. A failure on one shortcut is recorded and
 /// the run continues: one locked or otherwise unwritable file must never
 /// stop the rest of the batch from being processed.
@@ -329,7 +369,12 @@ pub fn apply(actions: &[Action], dry_run: bool) -> Vec<Outcome> {
                     // was never created.
                     write_lnk(to, lnk).map_err(|e| e.to_string())?;
 
-                    if from != to {
+                    // `names_the_same_file`, not `from != to`: when the two
+                    // spellings are one file, the write above has already
+                    // done the entire job, and removing `from` would delete
+                    // exactly what was just written. Skipping the deletion
+                    // there is not a partial move — it is the whole move.
+                    if !names_the_same_file(from, to) {
                         // The new shortcut now exists and is correct even
                         // if the next step fails, so a failure here must
                         // not undo it: deleting `to` to "roll back" would
