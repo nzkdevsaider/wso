@@ -25,12 +25,12 @@
 mod common;
 
 use std::path::PathBuf;
-use winshortcuts_organizer::config::Config;
-use winshortcuts_organizer::layout::Organization;
-use winshortcuts_organizer::ops;
-use winshortcuts_organizer::plan::{plan, Action};
-use winshortcuts_organizer::platform::{Game, IconCandidate, Launch, Platform};
-use winshortcuts_organizer::shortcut::writer::ComGuard;
+use winshortcutsorganizer::config::Config;
+use winshortcutsorganizer::layout::Organization;
+use winshortcutsorganizer::ops;
+use winshortcutsorganizer::plan::{plan, Action};
+use winshortcutsorganizer::platform::{Game, IconCandidate, Launch, Platform};
+use winshortcutsorganizer::shortcut::writer::ComGuard;
 
 fn windir() -> PathBuf {
     PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into()))

@@ -3,8 +3,8 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use winshortcuts_organizer::platform::Platform;
-use winshortcuts_organizer::shortcut::{
+use winshortcutsorganizer::platform::Platform;
+use winshortcutsorganizer::shortcut::{
     signature::{decode, encode, Signature},
     writer::{read_lnk, write_lnk, ComGuard},
     LnkData,

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
-use winshortcuts_organizer::platform::epic::{launch_uri, EpicProvider};
-use winshortcuts_organizer::platform::GameProvider;
+use winshortcutsorganizer::platform::epic::{launch_uri, EpicProvider};
+use winshortcutsorganizer::platform::GameProvider;
 
 mod common;
 

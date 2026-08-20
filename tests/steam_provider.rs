@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
-use winshortcuts_organizer::platform::{steam::SteamProvider, GameProvider};
+use winshortcutsorganizer::platform::{steam::SteamProvider, GameProvider};
 
 mod common;
 

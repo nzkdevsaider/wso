@@ -1,6 +1,8 @@
+pub mod banner;
 pub mod cli;
 pub mod commands;
 pub mod config;
+pub mod console;
 pub mod icon;
 pub mod layout;
 pub mod migrate;

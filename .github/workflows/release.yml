@@ -2,19 +2,57 @@ name: release
 
 on:
   push:
+    # A push to `development` produces a throwaway binary for testing;
+    # a `v*` tag produces the published release. Nothing else builds one.
+    branches: [development]
     tags: ['v*']
 
 jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: check
     runs-on: windows-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # build.rs stamps the version from the tag on HEAD, and the default
+          # shallow checkout does not bring tags along. Without this a tagged
+          # build would stamp itself `-dev` and the guard below would fail it.
+          fetch-depth: 0
+
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --all
+
       - run: cargo build --release
-      - uses: softprops/action-gh-release@v2
+
+      - name: Report the stamped version
+        shell: pwsh
+        run: ./target/release/wso.exe --version
+
+      - name: The tag must match the version the binary reports
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $reported = (& ./target/release/wso.exe --version).Split(' ')[1]
+          if ("v$reported" -ne "${{ github.ref_name }}") {
+            Write-Host "::error::tag ${{ github.ref_name }} but the binary reports $reported - bump the version in Cargo.toml, commit, then move the tag"
+            exit 1
+          }
+
+      - name: Development build
+        if: github.ref == 'refs/heads/development'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wso-dev-${{ github.sha }}
+          path: target/release/wso.exe
+          retention-days: 14
+
+      - name: Published release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
         with:
           files: target/release/wso.exe
           body: |

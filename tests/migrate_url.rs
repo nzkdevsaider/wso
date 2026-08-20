@@ -3,13 +3,13 @@
 mod common;
 
 use std::path::PathBuf;
-use winshortcuts_organizer::migrate::convert_one;
-use winshortcuts_organizer::platform::steam::SteamProvider;
-use winshortcuts_organizer::platform::{Game, IconCandidate, Launch, Platform};
-use winshortcuts_organizer::shortcut::signature::{decode, encode, Signature};
-use winshortcuts_organizer::shortcut::url_legacy::LegacyUrl;
-use winshortcuts_organizer::shortcut::writer::{read_lnk, write_lnk, ComGuard};
-use winshortcuts_organizer::shortcut::LnkData;
+use winshortcutsorganizer::migrate::convert_one;
+use winshortcutsorganizer::platform::steam::SteamProvider;
+use winshortcutsorganizer::platform::{Game, IconCandidate, Launch, Platform};
+use winshortcutsorganizer::shortcut::signature::{decode, encode, Signature};
+use winshortcutsorganizer::shortcut::url_legacy::LegacyUrl;
+use winshortcutsorganizer::shortcut::writer::{read_lnk, write_lnk, ComGuard};
+use winshortcutsorganizer::shortcut::LnkData;
 
 fn system_exe() -> PathBuf {
     let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());

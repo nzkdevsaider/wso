@@ -1,9 +1,16 @@
 use clap::Parser;
-use winshortcuts_organizer::cli::{Cli, Command};
-use winshortcuts_organizer::{commands, shortcut::writer::ComGuard};
+use std::io::IsTerminal;
+use winshortcutsorganizer::cli::{Cli, Command};
+use winshortcutsorganizer::{banner, commands, console, shortcut::writer::ComGuard};
 
 fn main() {
+    console::use_utf8_output();
+
     let cli = Cli::parse();
+
+    if banner::should_print(std::io::stdout().is_terminal(), cli.yes) {
+        println!("{}\n", banner::BANNER);
+    }
 
     // Every shortcut read or write in this program goes through the shell
     // COM APIs, so COM must be initialized on this thread before any of

@@ -1,8 +1,14 @@
 name: ci
 
 on:
+  # Tag pushes and pushes to `development` are handled by release.yml, which
+  # calls this workflow through `workflow_call` before it builds anything.
+  # Without these two exclusions the whole suite would run twice for them.
   push:
+    branches-ignore: [development]
+    tags-ignore: ['**']
   pull_request:
+  workflow_call:
 
 jobs:
   check:

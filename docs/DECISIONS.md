@@ -10,7 +10,7 @@ exhaustive: every ruling made during execution appears below, in the order it wa
 made. Nothing was decided silently.
 
 The design document is the authority on intent:
-`docs/superpowers/specs/2026-08-16-winshortcuts-organizer-design.md`.
+`docs/superpowers/specs/2026-08-16-winshortcutsorganizer-design.md`.
 
 ---
 
@@ -225,3 +225,21 @@ the brief's Step 5 required a real sync, confirming an icon and a launch, then a
 derive candidates from the base directory rather than from remembered names. sync, status and clean should scan the base plus one level of subdirectories, claiming only signed shortcuts. Ownership gates every deletion and overwrite, so a wider scan cannot endanger anything foreign — the same argument clean_scan_dirs already makes. This handles any folder name the user has ever used, including one whose config entry was lost, which name-remembering cannot.
 
 **Cost if wrong:** one extra readdir per base plus one per subdirectory.
+
+### 39
+
+the maintainer asked for a build script that identifies a development binary by the commit it was built from, but not for the rule that decides which builds are *not* development binaries. Decision: `build.rs` treats a build as a release only when HEAD carries the tag `v{version}` for the version in `Cargo.toml`, and stamps every other build as `{version}-dev.{short sha}` — including a build from `main`, which is not a release until it has been tagged. The tag is the release marker rather than the branch, so no binary can claim to be `0.2.0` unless `0.2.0` was actually cut, and the stamped version can never drift from the tag it claims. Where git is unavailable or the source is not a checkout at all, the bare `Cargo.toml` version is stamped rather than failing the build.
+
+**Cost if wrong:** a CI job that checks out without tags (`actions/checkout` at `fetch-depth: 1` on a branch) stamps a genuine release as `-dev`; the fix is to fetch the tag, not to relax the rule. Locally, the first tag ever created in a fresh clone can leave one stale stamp behind, because `.git/refs/tags` does not exist to be watched until it does; every later tag is picked up.
+
+### 40
+
+the banner's block characters (`U+2588`, `U+2584`, `U+2580`) reach the console as UTF-8 bytes, and a Windows console decodes stdout with the OEM code page — 850 on the maintainer's machine, where `chcp` mangles even its own output. Left alone, the wordmark renders as mojibake in `cmd.exe` and in Windows PowerShell; PowerShell 7 happens to hide the problem by setting the code page itself. Decision: `console::use_utf8_output` calls `SetConsoleOutputCP(65001)` as the first statement in `main`, before `Cli::parse` can print `--help`. It is not restored on exit: `main` leaves through `std::process::exit`, which runs no destructor, so the guard pattern `ComGuard` uses is not available here. The change therefore outlives the process and the console window keeps reporting 65001 afterwards. This also fixes every non-ASCII game title the tool prints, which had the same defect and no one had noticed.
+
+**Cost if wrong:** a console left on the UTF-8 code page for the rest of its session, which affects how *other* programs' output is decoded in that window. The alternative — a correct wordmark for nobody, and garbled game titles — was worse.
+
+### 41
+
+clap strips leading whitespace from each line of `before_help`, and the wordmark's third line starts one column in, so `--help` rendered it shifted a column left of the two above it. Decision: that indent is a non-breaking space (`U+00A0`), which clap leaves alone and every terminal draws as a space. `banner.rs` asserts no line begins with a plain space, so replacing it back — the obvious "cleanup" — fails the suite instead of silently skewing the art, and `tests/banner_in_help.rs` compares the rendered `--help` against the constant line for line.
+
+**Cost if wrong:** one character in the banner is not the space it looks like, which matters only to whoever copies the art out of `--help` into a context where `U+00A0` is not a space.

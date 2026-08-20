@@ -1,5 +1,5 @@
 use std::fs;
-use winshortcuts_organizer::icon::exe_finder::{collect_candidates, pick_executable};
+use winshortcutsorganizer::icon::exe_finder::{collect_candidates, pick_executable};
 
 mod common;
 

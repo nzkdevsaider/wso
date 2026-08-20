@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2021, `clap`, `inquire`, `serde`/`serde_json`, `toml`, `windows`, `image`, `ico`, `thiserror`.
 
-**Spec:** `docs/superpowers/specs/2026-08-16-winshortcuts-organizer-design.md`
+**Spec:** `docs/superpowers/specs/2026-08-16-winshortcutsorganizer-design.md`
 
 ## Global Constraints
 
@@ -18,7 +18,7 @@
 - All program output, `--help` text, code comments, commit messages and the README are in **English**.
 - `appcache/appinfo.vdf` is never parsed. No network access anywhere in the tool.
 - Emit `.lnk` files only. Never create a `.url`.
-- Binary name is `wso`; crate name is `winshortcuts-organizer`.
+- Binary name is `wso`; crate name is `winshortcutsorganizer`.
 - Every destructive operation prints its plan and requires confirmation unless `--yes` is passed.
 - Exit codes: `0` all items succeeded, `1` some item failed, `2` global failure.
 
@@ -76,8 +76,8 @@ Unit tests live in `#[cfg(test)] mod tests` inside each file. Cross-module integ
 - [ ] **Step 1: Create the crate**
 
 ```bash
-cd winshortcuts-organizer
-cargo init --name winshortcuts-organizer --bin
+cd winshortcutsorganizer
+cargo init --name winshortcutsorganizer --bin
 ```
 
 Then edit `Cargo.toml` so the binary is named `wso`:
@@ -1018,7 +1018,7 @@ Create `tests/exe_walk.rs`:
 
 ```rust
 use std::fs;
-use winshortcuts_organizer::icon::exe_finder::{collect_candidates, pick_executable};
+use winshortcutsorganizer::icon::exe_finder::{collect_candidates, pick_executable};
 
 #[test]
 fn walks_a_real_directory_and_picks_the_game() {
@@ -1052,7 +1052,7 @@ pub mod shortcut;
 and change `src/main.rs` to use it:
 
 ```rust
-use winshortcuts_organizer as wso;
+use winshortcutsorganizer as wso;
 
 fn main() {
     let _ = wso::layout::sanitize_filename("wso");
@@ -1496,7 +1496,7 @@ Create `tests/steam_provider.rs`:
 ```rust
 use std::fs;
 use std::path::PathBuf;
-use winshortcuts_organizer::platform::{steam::SteamProvider, GameProvider};
+use winshortcutsorganizer::platform::{steam::SteamProvider, GameProvider};
 
 fn write(path: PathBuf, contents: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1819,7 +1819,7 @@ Create `tests/epic_provider.rs`:
 ```rust
 use std::fs;
 use std::path::PathBuf;
-use winshortcuts_organizer::platform::{epic::EpicProvider, GameProvider};
+use winshortcutsorganizer::platform::{epic::EpicProvider, GameProvider};
 
 #[test]
 fn reads_manifests_and_filters_non_games() {
@@ -2251,7 +2251,7 @@ Create `tests/lnk_roundtrip.rs`:
 #![cfg(windows)]
 
 use std::path::PathBuf;
-use winshortcuts_organizer::shortcut::{
+use winshortcutsorganizer::shortcut::{
     writer::{read_lnk, write_lnk, ComGuard},
     LnkData,
 };
@@ -2323,7 +2323,7 @@ cargo add windows --features Win32_System_Registry,Win32_Foundation,Win32_UI_She
 - [ ] **Step 3: Run test to verify it fails**
 
 Run: `cargo test --test lnk_roundtrip`
-Expected: FAIL — `unresolved import 'winshortcuts_organizer::shortcut::writer'`
+Expected: FAIL — `unresolved import 'winshortcutsorganizer::shortcut::writer'`
 
 - [ ] **Step 4: Write the COM implementation**
 
@@ -3404,14 +3404,14 @@ Create `tests/ops_apply.rs`:
 #![cfg(windows)]
 
 use std::path::PathBuf;
-use winshortcuts_organizer::ops::{apply, scan_owned, summarize};
-use winshortcuts_organizer::plan::Action;
-use winshortcuts_organizer::shortcut::{
+use winshortcutsorganizer::ops::{apply, scan_owned, summarize};
+use winshortcutsorganizer::plan::Action;
+use winshortcutsorganizer::shortcut::{
     signature::{encode, Signature},
     writer::{write_lnk, ComGuard},
     LnkData,
 };
-use winshortcuts_organizer::platform::Platform;
+use winshortcutsorganizer::platform::Platform;
 
 fn system_exe() -> PathBuf {
     let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
@@ -3469,7 +3469,7 @@ fn dry_run_changes_nothing_on_disk() {
     let target = dir.join("Game.lnk");
 
     let actions = vec![Action::Create(
-        winshortcuts_organizer::plan::DesiredShortcut {
+        winshortcutsorganizer::plan::DesiredShortcut {
             sig: Signature { platform: Platform::Steam, id: "1".into() },
             path: target.clone(),
             lnk: LnkData {
@@ -3525,7 +3525,7 @@ fn delete_removes_the_file() {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test --test ops_apply`
-Expected: FAIL — `unresolved import 'winshortcuts_organizer::ops'`
+Expected: FAIL — `unresolved import 'winshortcutsorganizer::ops'`
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -3975,8 +3975,8 @@ Replace `src/main.rs`:
 
 ```rust
 use clap::Parser;
-use winshortcuts_organizer::cli::{Cli, Command};
-use winshortcuts_organizer::{commands, shortcut::writer::ComGuard};
+use winshortcutsorganizer::cli::{Cli, Command};
+use winshortcutsorganizer::{commands, shortcut::writer::ComGuard};
 
 fn main() {
     let cli = Cli::parse();

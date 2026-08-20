@@ -3,10 +3,10 @@
 mod common;
 
 use std::path::PathBuf;
-use winshortcuts_organizer::ops::{apply, scan_owned, summarize};
-use winshortcuts_organizer::plan::{Action, DesiredShortcut};
-use winshortcuts_organizer::platform::Platform;
-use winshortcuts_organizer::shortcut::{
+use winshortcutsorganizer::ops::{apply, scan_owned, summarize};
+use winshortcutsorganizer::plan::{Action, DesiredShortcut};
+use winshortcutsorganizer::platform::Platform;
+use winshortcutsorganizer::shortcut::{
     signature::{decode, encode, Signature},
     writer::{read_lnk, write_lnk, ComGuard},
     LnkData,

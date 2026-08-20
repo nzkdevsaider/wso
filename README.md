@@ -184,6 +184,14 @@ wrote is lost.
 Requires a Rust toolchain and Windows — the shortcut and icon handling goes
 through the Windows Shell COM APIs and has no cross-platform path.
 
+`wso --version` reports the version stamped into the binary when it was built.
+A build made from a commit tagged `v<version>` reports that version bare
+(`wso 0.2.0`); a build from any other commit reports the same version with the
+short commit hash it was built from appended (`wso 0.2.0-dev.a1b2c3d`), so a
+binary taken from a development branch can never be mistaken for the release it
+precedes. Built outside a git checkout — from an unpacked source archive — the
+bare version is reported.
+
 ## License
 
 MIT
