@@ -136,6 +136,9 @@ change. `docs/DECISIONS.md` records the reasoning behind them, and
 
 - `tests/common/mod.rs::unique_temp_dir` names scratch directories by pid + atomic counter; use it
   rather than a fixed temp path, since tests run in parallel.
+  It also expands the temp base out of the 8.3 short form GitHub's runner hands a process
+  (`C:\Users\RUNNER~1\...`), because a shell link saves the long form of its target: without
+  that, a test asserting on a target inside the temp directory passes locally and fails on CI.
 - Integration tests that touch real `.lnk` files start with `#![cfg(windows)]`.
 - The interactive wizard and the "answer no" confirmation path are covered only by unit tests of
   their pure logic — no automated test drives an `inquire` prompt. Changes there are unverified by

@@ -13,5 +13,21 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 pub fn unique_temp_dir(label: &str) -> PathBuf {
     let pid = std::process::id();
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("wso_{label}_{pid}_{n}"))
+    temp_dir_without_short_names().join(format!("wso_{label}_{pid}_{n}"))
+}
+
+const VERBATIM_PREFIX: &str = r"\\?\";
+
+fn temp_dir_without_short_names() -> PathBuf {
+    let temp = std::env::temp_dir();
+    let Ok(canonical) = std::fs::canonicalize(&temp) else {
+        return temp;
+    };
+    match canonical
+        .to_str()
+        .and_then(|path| path.strip_prefix(VERBATIM_PREFIX))
+    {
+        Some(long) => PathBuf::from(long),
+        None => canonical,
+    }
 }
