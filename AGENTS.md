@@ -86,9 +86,10 @@ Windows-specific code is `#[cfg(windows)]` with a `#[cfg(not(windows))]` stub be
 returns an error or an empty list, so the crate still compiles and the pure tests still run
 elsewhere. Keep that pairing when adding platform code.
 
-`build.rs` stamps the version clap reports as `WSO_VERSION`, read by `env!` in `cli.rs`: a commit
-tagged `v{Cargo.toml version}` builds as that version bare, any other commit as
-`{version}-dev.{short sha}`. It degrades to the bare version rather than failing when git is
+`build.rs` stamps the version clap reports as `WSO_VERSION`, read by `env!` in `banner.rs` and
+re-exported as `banner::VERSION`, which `cli.rs` uses for both `--version` and the line under the
+wordmark: a commit tagged `v{Cargo.toml version}` builds as that version bare, any other commit
+as `{version}-dev.{short sha}`. It degrades to the bare version rather than failing when git is
 absent, and `tests/version_flag.rs` asserts the binary reports one shape or the other.
 
 ## Invariants that are load-bearing
@@ -125,9 +126,10 @@ change. `docs/DECISIONS.md` records the reasoning behind them, and
   `--dry-run` must never write preferences back.
 - **Console encoding.** `console::use_utf8_output` runs first in `main`, before `Cli::parse` can
   print `--help`: without it a Windows console decodes this program's UTF-8 with the OEM code page
-  and every block character and non-ASCII game title comes out as mojibake. The banner's third line
-  is indented with `U+00A0`, not a space, because clap trims plain leading whitespace out of
-  `before_help`; `banner.rs` and `tests/banner_in_help.rs` both guard that.
+  and every block character and non-ASCII game title comes out as mojibake. The wordmark's third
+  line and the version line below it are indented with `U+00A0`, not a space, because clap trims
+  plain leading whitespace out of each `before_help` line; `banner.rs` and
+  `tests/banner_in_help.rs` both guard that.
 - **Icon cache timing.** Icons resolve while the report is *built*, so `sync --dry-run` and `status`
   can still write into `%LOCALAPPDATA%` even though they never touch the Desktop or Start Menu.
   `migrate --dry-run` and `clean` never do. The README documents this precisely; keep them in sync.
@@ -142,7 +144,7 @@ change. `docs/DECISIONS.md` records the reasoning behind them, and
 - Integration tests that touch real `.lnk` files start with `#![cfg(windows)]`.
 - The interactive wizard and the "answer no" confirmation path are covered only by unit tests of
   their pure logic — no automated test drives an `inquire` prompt. Changes there are unverified by
-  CI and the README says so.
+  CI.
 
 ## Style
 

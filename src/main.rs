@@ -9,7 +9,7 @@ fn main() {
     let cli = Cli::parse();
 
     if banner::should_print(std::io::stdout().is_terminal(), cli.yes) {
-        println!("{}\n", banner::BANNER);
+        println!("{}\n", banner::header());
     }
 
     // Every shortcut read or write in this program goes through the shell

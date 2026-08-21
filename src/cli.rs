@@ -32,8 +32,8 @@ pub enum TargetArg {
 #[derive(Debug, Parser)]
 #[command(
     name = "wso",
-    version = env!("WSO_VERSION"),
-    before_help = crate::banner::BANNER,
+    version = crate::banner::VERSION,
+    before_help = crate::banner::header(),
     about = "Organize Steam and Epic game shortcuts on Windows",
     long_about = "Creates real .lnk shortcuts with correct icons for your installed \
 Steam and Epic games, on the Desktop and in the Start Menu.\n\n\
