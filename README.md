@@ -1,5 +1,9 @@
 # WinShortcutsOrganizer
 
+
+<video src="https://github.com/user-attachments/assets/2259a83e-4e2f-4e72-a8e4-99db722ab81f" width="100%" controls></video>
+
+
 Creates real Windows shortcuts, with correct icons, for the games you already
 have installed through Steam and the Epic Games Launcher.
 
