@@ -111,3 +111,112 @@ fn reads_a_manifest_saved_with_an_uppercase_extension() {
 
     fs::remove_dir_all(&tmp).unwrap();
 }
+
+#[test]
+fn reads_preview_installations_jsonl_and_caches() {
+    let tmp = common::unique_temp_dir("epic_preview_provider_test");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+
+    let games_root = tmp.join("D_EpicGames");
+    let btd_dir = games_root.join("BloonsTD6");
+    let fn_dir = games_root.join("Fortnite");
+    let ue_dir = games_root.join("UE_5.5");
+    fs::create_dir_all(&btd_dir).unwrap();
+    fs::create_dir_all(&fn_dir).unwrap();
+    fs::create_dir_all(&ue_dir).unwrap();
+
+    let jsonl = format!(
+        r#"{{"version":1,"writtenAt":"2026-11-25T02:03:09Z","entries":4}}
+{{"installationId":"ID_BTD","complete":true,"dir":{btd:?},"platform":"Windows","namespace":"6a8d","itemId":"item_btd","artifactId":"art_btd","version":"57.4","launchExecutable":"BloonsTD6.exe"}}
+{{"installationId":"ID_FN","complete":false,"dir":{fn_dir:?},"platform":"Windows","namespace":"fn","itemId":"item_fn","artifactId":"Fortnite","version":"43.10","pendingVersion":"43.11","launchExecutable":"FortniteGame/Binaries/Win64/FortniteBootstrapper.exe"}}
+{{"installationId":"ID_UE","complete":true,"dir":{ue_dir:?},"platform":"Windows","namespace":"ue","itemId":"item_ue","artifactId":"UE_5.5","version":"5.5.0","launchExecutable":"Engine/Binaries/Win64/UnrealEditor.exe"}}
+{{"installationId":"ID_MISSING_DIR","complete":true,"dir":{missing:?},"platform":"Windows","namespace":"ns","itemId":"item_missing","artifactId":"art_missing","version":"1.0","launchExecutable":"game.exe"}}
+"#,
+        btd = btd_dir.to_str().unwrap(),
+        fn_dir = fn_dir.to_str().unwrap(),
+        ue_dir = ue_dir.to_str().unwrap(),
+        missing = games_root.join("DeletedOnDisk").to_str().unwrap(),
+    );
+    fs::write(tmp.join("installations.jsonl"), jsonl).unwrap();
+
+    let account_dir = tmp.join("cache").join("prod").join("account").join("acc1");
+    fs::create_dir_all(&account_dir).unwrap();
+    fs::write(
+        account_dir.join("library-cache.json"),
+        r#"{"items":[
+            {"appId":{"namespaceId":"6a8d","itemId":"item_btd","appName":"art_btd"},"title":"Bloons TD 6"},
+            {"appId":{"namespaceId":"fn","itemId":"item_fn","appName":"Fortnite"},"title":"Fortnite"}
+        ]}"#,
+    )
+    .unwrap();
+
+    fs::write(
+        tmp.join("cache").join("prod").join("catalog-cache.json"),
+        r#"{"items":{
+            "item_ue":{"item":{"id":"item_ue","title":"Unreal Engine","categories":[{"path":"engines/ue5"},{"path":"engines"}]}}
+        }}"#,
+    )
+    .unwrap();
+
+    let games = EpicProvider::from_preview_dir(tmp.clone(), PathBuf::from("launcher.exe"))
+        .games()
+        .unwrap();
+
+    assert_eq!(games.len(), 2, "expected 2 games, got {games:?}");
+    assert_eq!(games[0].name, "Bloons TD 6");
+    assert_eq!(games[0].id, "art_btd");
+    assert_eq!(
+        games[0].launch.args,
+        format!("\"{}\"", launch_uri("6a8d", "item_btd", "art_btd"))
+    );
+    assert_eq!(games[1].name, "Fortnite");
+    assert_eq!(games[1].id, "Fortnite");
+
+    fs::remove_dir_all(&tmp).unwrap();
+}
+
+#[test]
+fn deduplicates_games_present_in_both_preview_and_legacy_manifests() {
+    let tmp = common::unique_temp_dir("epic_both_dirs_dedup");
+    let _ = fs::remove_dir_all(&tmp);
+    let legacy_dir = tmp.join("legacy");
+    let preview_dir = tmp.join("preview");
+    let fn_dir = tmp.join("Fortnite");
+    fs::create_dir_all(&legacy_dir).unwrap();
+    fs::create_dir_all(&preview_dir).unwrap();
+    fs::create_dir_all(&fn_dir).unwrap();
+
+    fs::write(
+        legacy_dir.join("fn.item"),
+        format!(
+            r#"{{"DisplayName":"Fortnite","InstallLocation":{fn_dir:?},
+                "LaunchExecutable":"FortniteBootstrapper.exe","AppName":"Fortnite",
+                "CatalogNamespace":"fn","CatalogItemId":"4fe7",
+                "AppCategories":["games"]}}"#,
+            fn_dir = fn_dir.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+
+    fs::write(
+        preview_dir.join("installations.jsonl"),
+        format!(
+            r#"{{"version":1}}
+{{"installationId":"ID_FN","complete":true,"dir":{fn_dir:?},"platform":"Windows","namespace":"fn","itemId":"4fe7","artifactId":"Fortnite","version":"43.10","launchExecutable":"FortniteBootstrapper.exe"}}
+"#,
+            fn_dir = fn_dir.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+
+    let games =
+        EpicProvider::from_both_dirs(legacy_dir, preview_dir, PathBuf::from("launcher.exe"))
+            .games()
+            .unwrap();
+
+    assert_eq!(games.len(), 1);
+    assert_eq!(games[0].name, "Fortnite");
+
+    fs::remove_dir_all(&tmp).unwrap();
+}
