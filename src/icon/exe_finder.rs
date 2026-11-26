@@ -156,14 +156,13 @@ fn walk(root: &Path, dir: &Path, remaining: usize, out: &mut Vec<ExeCandidate>) 
         let Ok(meta) = entry.metadata() else { continue };
         if meta.is_dir() {
             walk(root, &path, remaining - 1, out);
-        } else if crate::paths::has_extension(&path, "exe") {
-            if let Ok(rel) = path.strip_prefix(root) {
+        } else if crate::paths::has_extension(&path, "exe")
+            && let Ok(rel) = path.strip_prefix(root) {
                 out.push(ExeCandidate {
                     rel_path: rel.to_path_buf(),
                     size: meta.len(),
                 });
             }
-        }
     }
 }
 

@@ -402,11 +402,10 @@ pub fn sync(cli: &Cli) -> i32 {
     // Never before this point, so a wizard cancellation above returns without
     // writing anything either. See `should_save_preferences` for the two
     // reasons this run may not be allowed to write at all.
-    if should_save_preferences(cli.dry_run, &applied) {
-        if let Err(e) = config::save(&path, &cfg) {
+    if should_save_preferences(cli.dry_run, &applied)
+        && let Err(e) = config::save(&path, &cfg) {
             eprintln!("Warning: could not save preferences: {e}");
         }
-    }
     exit_code(failed)
 }
 

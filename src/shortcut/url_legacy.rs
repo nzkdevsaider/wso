@@ -58,11 +58,10 @@ pub fn parse(path: &Path, contents: &str) -> Option<LegacyUrl> {
                 return None;
             }
             appid = Some(digits);
-        } else if let Some(icon) = line.strip_prefix("IconFile=") {
-            if !icon.is_empty() {
+        } else if let Some(icon) = line.strip_prefix("IconFile=")
+            && !icon.is_empty() {
                 icon_file = Some(PathBuf::from(icon));
             }
-        }
     }
 
     Some(LegacyUrl {

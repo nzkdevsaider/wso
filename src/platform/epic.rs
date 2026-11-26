@@ -694,11 +694,10 @@ impl GameProvider for EpicProvider {
             }
         }
 
-        if !any_succeeded {
-            if let Some(err) = first_err {
+        if !any_succeeded
+            && let Some(err) = first_err {
                 return Err(err);
             }
-        }
 
         games.sort_by_key(|g| g.name.to_lowercase());
         Ok(games)

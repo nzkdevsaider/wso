@@ -227,8 +227,8 @@ fn write_atomically(dest: &Path, text: &str) -> Result<(), ConfigError> {
 /// warrant; it is a known property of two-step rename recovery, not an
 /// oversight.
 pub fn save(path: &Path, cfg: &Config) -> Result<(), ConfigError> {
-    if let Ok(existing_text) = std::fs::read_to_string(path) {
-        if toml::from_str::<Config>(&existing_text).is_err() {
+    if let Ok(existing_text) = std::fs::read_to_string(path)
+        && toml::from_str::<Config>(&existing_text).is_err() {
             match first_free_invalid_sibling(path) {
                 Some(invalid_path) => {
                     std::fs::rename(path, &invalid_path)
@@ -253,7 +253,6 @@ pub fn save(path: &Path, cfg: &Config) -> Result<(), ConfigError> {
                 }
             }
         }
-    }
 
     let text = toml::to_string_pretty(cfg).map_err(|e| ConfigError::Serialize(e.to_string()))?;
     if let Some(parent) = path.parent() {
