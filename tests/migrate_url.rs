@@ -6,10 +6,10 @@ use std::path::PathBuf;
 use winshortcutsorganizer::migrate::convert_one;
 use winshortcutsorganizer::platform::steam::SteamProvider;
 use winshortcutsorganizer::platform::{Game, IconCandidate, Launch, Platform};
-use winshortcutsorganizer::shortcut::signature::{decode, encode, Signature};
-use winshortcutsorganizer::shortcut::url_legacy::LegacyUrl;
-use winshortcutsorganizer::shortcut::writer::{read_lnk, write_lnk, ComGuard};
 use winshortcutsorganizer::shortcut::LnkData;
+use winshortcutsorganizer::shortcut::signature::{Signature, decode, encode};
+use winshortcutsorganizer::shortcut::url_legacy::LegacyUrl;
+use winshortcutsorganizer::shortcut::writer::{ComGuard, read_lnk, write_lnk};
 
 fn system_exe() -> PathBuf {
     let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());

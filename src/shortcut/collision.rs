@@ -19,7 +19,7 @@
 //! crate keys on (`shortcut::signature`), so there is one definition of
 //! "ours" in the codebase, not two that could drift apart.
 
-use crate::shortcut::signature::{decode, Signature};
+use crate::shortcut::signature::{Signature, decode};
 use crate::shortcut::writer::read_lnk;
 use std::path::Path;
 

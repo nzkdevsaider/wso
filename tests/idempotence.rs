@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use winshortcutsorganizer::config::Config;
 use winshortcutsorganizer::layout::Organization;
 use winshortcutsorganizer::ops;
-use winshortcutsorganizer::plan::{plan, Action};
+use winshortcutsorganizer::plan::{Action, plan};
 use winshortcutsorganizer::platform::{Game, IconCandidate, Launch, Platform};
 use winshortcutsorganizer::shortcut::writer::ComGuard;
 

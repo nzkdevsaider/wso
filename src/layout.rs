@@ -182,7 +182,7 @@ pub fn assign_filenames(entries: &[(Platform, String)]) -> Vec<String> {
 #[cfg(windows)]
 pub fn target_dir(target: Target) -> Result<PathBuf, LayoutError> {
     use windows::Win32::UI::Shell::{
-        FOLDERID_Desktop, FOLDERID_Programs, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
+        FOLDERID_Desktop, FOLDERID_Programs, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
     };
 
     // FOLDERID_Programs is the per-user Start Menu. FOLDERID_CommonPrograms

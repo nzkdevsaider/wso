@@ -228,31 +228,31 @@ fn write_atomically(dest: &Path, text: &str) -> Result<(), ConfigError> {
 /// oversight.
 pub fn save(path: &Path, cfg: &Config) -> Result<(), ConfigError> {
     if let Ok(existing_text) = std::fs::read_to_string(path)
-        && toml::from_str::<Config>(&existing_text).is_err() {
-            match first_free_invalid_sibling(path) {
-                Some(invalid_path) => {
-                    std::fs::rename(path, &invalid_path)
-                        .map_err(|e| ConfigError::Io(e.to_string()))?;
-                }
-                None => {
-                    let dir = path
-                        .parent()
-                        .filter(|p| !p.as_os_str().is_empty())
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| ".".to_string());
-                    let file_name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("config.toml");
-                    return Err(ConfigError::TooManyRescues(format!(
-                        "{dir} already holds {MAX_INVALID_SIBLINGS} rescued copies of \
+        && toml::from_str::<Config>(&existing_text).is_err()
+    {
+        match first_free_invalid_sibling(path) {
+            Some(invalid_path) => {
+                std::fs::rename(path, &invalid_path).map_err(|e| ConfigError::Io(e.to_string()))?;
+            }
+            None => {
+                let dir = path
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| ".".to_string());
+                let file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("config.toml");
+                return Err(ConfigError::TooManyRescues(format!(
+                    "{dir} already holds {MAX_INVALID_SIBLINGS} rescued copies of \
                          {file_name} ({file_name}.invalid through \
                          {file_name}.invalid.{MAX_INVALID_SIBLINGS}); clean them up \
                          before saving again"
-                    )));
-                }
+                )));
             }
         }
+    }
 
     let text = toml::to_string_pretty(cfg).map_err(|e| ConfigError::Serialize(e.to_string()))?;
     if let Some(parent) = path.parent() {

@@ -49,11 +49,11 @@ use crate::icon;
 use crate::layout::{self, Target};
 use crate::platform::steam::SteamProvider;
 use crate::platform::{Game, GameProvider, Platform};
-use crate::shortcut::collision::{check_existing, Collision};
-use crate::shortcut::signature::{encode, Signature};
+use crate::shortcut::LnkData;
+use crate::shortcut::collision::{Collision, check_existing};
+use crate::shortcut::signature::{Signature, encode};
 use crate::shortcut::url_legacy::{self, LegacyUrl};
 use crate::shortcut::writer::write_lnk;
-use crate::shortcut::LnkData;
 use std::path::{Path, PathBuf};
 
 /// Correction 1's decision, in code: prefer `icon_file` only once it is

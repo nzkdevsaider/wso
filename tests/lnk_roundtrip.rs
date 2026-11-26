@@ -5,9 +5,9 @@ mod common;
 use std::path::{Path, PathBuf};
 use winshortcutsorganizer::platform::Platform;
 use winshortcutsorganizer::shortcut::{
-    signature::{decode, encode, Signature},
-    writer::{read_lnk, write_lnk, ComGuard},
     LnkData,
+    signature::{Signature, decode, encode},
+    writer::{ComGuard, read_lnk, write_lnk},
 };
 
 /// Windows resolves a shortcut's local-file target and working directory to

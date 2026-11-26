@@ -7,9 +7,9 @@ use winshortcutsorganizer::ops::{apply, scan_owned, summarize};
 use winshortcutsorganizer::plan::{Action, DesiredShortcut};
 use winshortcutsorganizer::platform::Platform;
 use winshortcutsorganizer::shortcut::{
-    signature::{decode, encode, Signature},
-    writer::{read_lnk, write_lnk, ComGuard},
     LnkData,
+    signature::{Signature, decode, encode},
+    writer::{ComGuard, read_lnk, write_lnk},
 };
 
 fn system_exe() -> PathBuf {

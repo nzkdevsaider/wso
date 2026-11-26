@@ -562,10 +562,10 @@ fn launcher_exe_candidates() -> Vec<PathBuf> {
 
 #[cfg(windows)]
 fn registry_preview_appdata_paths() -> Vec<PathBuf> {
-    use windows::core::w;
     use windows::Win32::System::Registry::{
-        RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ,
+        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW,
     };
+    use windows::core::w;
 
     let mut out = Vec::new();
     let queries = [
@@ -616,8 +616,8 @@ fn registry_preview_appdata_paths() -> Vec<PathBuf> {
 
 #[cfg(windows)]
 fn registry_launcher_exes() -> Vec<PathBuf> {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW};
     use windows::core::w;
-    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
 
     let mut out = Vec::new();
     let mut buf = [0u16; 512];
@@ -694,10 +694,9 @@ impl GameProvider for EpicProvider {
             }
         }
 
-        if !any_succeeded
-            && let Some(err) = first_err {
-                return Err(err);
-            }
+        if !any_succeeded && let Some(err) = first_err {
+            return Err(err);
+        }
 
         games.sort_by_key(|g| g.name.to_lowercase());
         Ok(games)

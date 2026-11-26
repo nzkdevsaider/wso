@@ -72,11 +72,7 @@ pub(crate) fn parse_library_paths(text: &str) -> Option<Vec<PathBuf>> {
         .iter()
         .filter_map(|(_, v)| v.get("path")?.as_str().map(PathBuf::from))
         .collect();
-    if paths.is_empty() {
-        None
-    } else {
-        Some(paths)
-    }
+    if paths.is_empty() { None } else { Some(paths) }
 }
 
 pub(crate) fn parse_app_manifest(text: &str) -> Option<AppManifest> {
@@ -224,10 +220,10 @@ pub(crate) fn pick_library_image(dir: &Path) -> Option<PathBuf> {
 
 #[cfg(windows)]
 fn registry_roots() -> Vec<PathBuf> {
-    use windows::core::w;
     use windows::Win32::System::Registry::{
-        RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ,
+        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW,
     };
+    use windows::core::w;
 
     let mut out = Vec::new();
     let queries = [

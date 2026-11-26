@@ -1,4 +1,4 @@
-use winshortcutsorganizer::banner::{header, BANNER, VERSION};
+use winshortcutsorganizer::banner::{BANNER, VERSION, header};
 
 use std::process::Command;
 

@@ -27,12 +27,12 @@ use std::path::{Path, PathBuf};
 use winshortcutsorganizer::config::Config;
 use winshortcutsorganizer::layout::Organization;
 use winshortcutsorganizer::ops;
-use winshortcutsorganizer::plan::{plan, Action};
+use winshortcutsorganizer::plan::{Action, plan};
 use winshortcutsorganizer::platform::{Game, IconCandidate, Launch, Platform};
 use winshortcutsorganizer::shortcut::{
-    signature::{encode, Signature},
-    writer::{write_lnk, ComGuard},
     LnkData,
+    signature::{Signature, encode},
+    writer::{ComGuard, write_lnk},
 };
 
 /// A folder name that is not the default, contains a space, and is not
@@ -92,11 +92,13 @@ fn reconcile(base: &Path, organization: Organization) -> Vec<Action> {
 
 fn assert_single_move(actions: &[Action], from: &Path, to: &Path) {
     match actions {
-        [Action::Move {
-            from: got_from,
-            to: got_to,
-            ..
-        }] => {
+        [
+            Action::Move {
+                from: got_from,
+                to: got_to,
+                ..
+            },
+        ] => {
             assert_eq!(got_from, from);
             assert_eq!(got_to, to);
         }

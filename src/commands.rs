@@ -15,8 +15,8 @@ use crate::cli::Cli;
 use crate::config::{self, ConfigStatus};
 use crate::layout::{self, LayoutError, Target};
 use crate::ops;
-use crate::plan::{plan, Action};
-use crate::platform::{epic::EpicProvider, steam::SteamProvider, Game, GameProvider, Platform};
+use crate::plan::{Action, plan};
+use crate::platform::{Game, GameProvider, Platform, epic::EpicProvider, steam::SteamProvider};
 use std::path::{Path, PathBuf};
 
 /// Loads the config, warning the user if the file on disk was corrupt.
@@ -228,11 +228,7 @@ pub(crate) fn confirm(prompt: &str, assume_yes: bool) -> bool {
 /// that decides between the two — it deliberately has no path to `2`; see
 /// the module doc comment for where that code comes from instead.
 pub(crate) fn exit_code(failed: usize) -> i32 {
-    if failed > 0 {
-        1
-    } else {
-        0
-    }
+    if failed > 0 { 1 } else { 0 }
 }
 
 /// The exact wording `print_summary` prints, pulled into its own function
@@ -403,9 +399,10 @@ pub fn sync(cli: &Cli) -> i32 {
     // writing anything either. See `should_save_preferences` for the two
     // reasons this run may not be allowed to write at all.
     if should_save_preferences(cli.dry_run, &applied)
-        && let Err(e) = config::save(&path, &cfg) {
-            eprintln!("Warning: could not save preferences: {e}");
-        }
+        && let Err(e) = config::save(&path, &cfg)
+    {
+        eprintln!("Warning: could not save preferences: {e}");
+    }
     exit_code(failed)
 }
 

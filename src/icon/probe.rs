@@ -5,8 +5,8 @@ use std::path::Path;
 /// a blank shortcut.
 #[cfg(windows)]
 pub fn has_icon(path: &Path) -> bool {
-    use windows::core::HSTRING;
     use windows::Win32::UI::Shell::ExtractIconExW;
+    use windows::core::HSTRING;
 
     if !path.is_file() {
         return false;

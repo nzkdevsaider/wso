@@ -25,10 +25,10 @@ use crate::layout;
 use crate::paths;
 use crate::plan::{Action, DesiredShortcut, OwnedShortcut};
 use crate::platform::Game;
+use crate::shortcut::LnkData;
 use crate::shortcut::collision::{self, Collision};
 use crate::shortcut::signature::{decode, encode};
 use crate::shortcut::writer::{read_lnk, write_lnk};
-use crate::shortcut::LnkData;
 use std::path::{Path, PathBuf};
 
 /// Reads every `.lnk` in the given directories and keeps only the ones
@@ -420,11 +420,7 @@ fn run<F>(dry_run: bool, f: F) -> Result<(), String>
 where
     F: FnOnce() -> Result<(), String>,
 {
-    if dry_run {
-        Ok(())
-    } else {
-        f()
-    }
+    if dry_run { Ok(()) } else { f() }
 }
 
 pub fn summarize(outcomes: &[Outcome]) -> Summary {

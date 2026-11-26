@@ -2,8 +2,8 @@
 //! shortcuts this tool already owns. No I/O happens here, which is what makes
 //! every command's behavior testable without Windows, Steam or Epic.
 
-use crate::shortcut::signature::Signature;
 use crate::shortcut::LnkData;
+use crate::shortcut::signature::Signature;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
