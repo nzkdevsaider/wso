@@ -13,6 +13,8 @@ pub enum Command {
     Clean,
     /// Show what exists and what is out of sync
     Status,
+    /// Open the configured shortcut destination folder(s)
+    Open,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -75,6 +77,10 @@ pub struct Cli {
     /// Skip confirmation prompts
     #[arg(long, short, global = true)]
     pub yes: bool,
+
+    /// Open the destination folder(s) in Explorer after syncing
+    #[arg(long, global = true)]
+    pub open: bool,
 }
 
 impl Cli {
@@ -154,6 +160,17 @@ mod tests {
             Cli::parse_from(["wso", "migrate"]).effective_command(),
             Command::Migrate
         );
+        assert_eq!(
+            Cli::parse_from(["wso", "open"]).effective_command(),
+            Command::Open
+        );
+    }
+
+    #[test]
+    fn parses_open_flag() {
+        let cli = Cli::parse_from(["wso", "sync", "--open"]);
+        assert!(cli.open);
+        assert_eq!(cli.effective_command(), Command::Sync);
     }
 
     #[test]

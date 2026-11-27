@@ -416,6 +416,27 @@ pub fn apply(actions: &[Action], dry_run: bool) -> Vec<Outcome> {
     outcomes
 }
 
+/// Opens `path` in Windows Explorer without waiting for the process to exit.
+///
+/// `explorer.exe` often exits with status `1` even when it successfully
+/// hands off to an existing Explorer window, so spawning without waiting
+/// avoids false failures and keeps the CLI non-blocking.
+#[cfg(windows)]
+pub fn open_folder(path: &Path) -> std::io::Result<()> {
+    std::process::Command::new("explorer.exe")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(not(windows))]
+pub fn open_folder(_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "opening folders in Explorer is only supported on Windows",
+    ))
+}
+
 fn run<F>(dry_run: bool, f: F) -> Result<(), String>
 where
     F: FnOnce() -> Result<(), String>,

@@ -351,6 +351,55 @@ fn should_save_preferences(dry_run: bool, outcomes: &[Applied]) -> bool {
     !dry_run && !outcomes.contains(&Applied::Declined)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenDecision {
+    Skip,
+    Ask,
+    OpenNow,
+}
+
+/// Decides whether `sync` should open the destination folder(s) after
+/// applying changes. Pulled out as a pure function so the dry-run, declined,
+/// `--open`, `--yes`, and interactive branches are unit-testable.
+fn should_open_after_sync(
+    dry_run: bool,
+    assume_yes: bool,
+    open_flag: bool,
+    outcomes: &[Applied],
+) -> OpenDecision {
+    if dry_run || outcomes.contains(&Applied::Declined) {
+        return OpenDecision::Skip;
+    }
+    if open_flag {
+        return OpenDecision::OpenNow;
+    }
+    if assume_yes {
+        OpenDecision::Skip
+    } else {
+        OpenDecision::Ask
+    }
+}
+
+/// Opens each existing destination directory in Windows Explorer and returns
+/// how many failed to launch. Non-existent directories are reported as an
+/// informational note rather than a failure (for instance, when no games were
+/// found for a target).
+fn open_destinations(dirs: &[PathBuf]) -> usize {
+    let mut failed = 0;
+    for dir in dirs {
+        if !dir.is_dir() {
+            println!("Destination folder does not exist yet: {}", dir.display());
+            continue;
+        }
+        println!("Opening {}", dir.display());
+        if let Err(e) = ops::open_folder(dir) {
+            eprintln!("Warning: could not open {}: {e}", dir.display());
+            failed += 1;
+        }
+    }
+    failed
+}
+
 /// Reconciles and (subject to confirmation) applies changes for one sync
 /// target under the configured organization. `base` is already resolved by
 /// the caller (see `resolve_bases`), so this never fails.
@@ -387,6 +436,8 @@ pub fn sync(cli: &Cli) -> i32 {
     let (resolved, unresolved) = resolve_bases(cfg.targets.iter().copied(), layout::target_dir);
     failed += warn_unresolved(&unresolved, "synced");
 
+    let dest_dirs = layout::collect_destination_dirs(&resolved, &cfg.organization);
+
     let mut applied = Vec::new();
     for (target, base) in resolved {
         let (s, outcome) = sync_target(&cfg, &games, &base, target, cli.dry_run, cli.yes);
@@ -402,6 +453,18 @@ pub fn sync(cli: &Cli) -> i32 {
         && let Err(e) = config::save(&path, &cfg)
     {
         eprintln!("Warning: could not save preferences: {e}");
+    }
+
+    let existing_dests: Vec<PathBuf> = dest_dirs.into_iter().filter(|d| d.is_dir()).collect();
+    if !existing_dests.is_empty() {
+        let should_open = match should_open_after_sync(cli.dry_run, cli.yes, cli.open, &applied) {
+            OpenDecision::Skip => false,
+            OpenDecision::OpenNow => true,
+            OpenDecision::Ask => confirm("Open destination folder(s) in Explorer?", false),
+        };
+        if should_open {
+            failed += open_destinations(&existing_dests);
+        }
     }
     exit_code(failed)
 }
@@ -506,6 +569,19 @@ pub fn status(cli: &Cli) -> i32 {
 /// `main` calls through, matching every other command in this module.
 pub fn migrate(cli: &Cli) -> i32 {
     crate::migrate::run(cli)
+}
+
+pub fn open(cli: &Cli) -> i32 {
+    let path = config::config_path();
+    let mut cfg = load_config_with_warning(&path);
+    cli.apply_overrides(&mut cfg);
+
+    let (resolved, unresolved) = resolve_bases(cfg.targets.iter().copied(), layout::target_dir);
+    let mut failed = warn_unresolved(&unresolved, "opened");
+
+    let dirs = layout::collect_destination_dirs(&resolved, &cfg.organization);
+    failed += open_destinations(&dirs);
+    exit_code(failed)
 }
 
 #[cfg(test)]
@@ -785,6 +861,32 @@ mod tests {
         assert!(
             !real.contains("would be"),
             "a real run must not hedge: {real}"
+        );
+    }
+
+    // --- should_open_after_sync ---
+
+    #[test]
+    fn should_open_after_sync_respects_dry_run_declined_and_flags() {
+        assert_eq!(
+            should_open_after_sync(true, false, true, &[Applied::Proceeded]),
+            OpenDecision::Skip
+        );
+        assert_eq!(
+            should_open_after_sync(false, false, true, &[Applied::Declined]),
+            OpenDecision::Skip
+        );
+        assert_eq!(
+            should_open_after_sync(false, true, true, &[Applied::Proceeded]),
+            OpenDecision::OpenNow
+        );
+        assert_eq!(
+            should_open_after_sync(false, true, false, &[Applied::Proceeded]),
+            OpenDecision::Skip
+        );
+        assert_eq!(
+            should_open_after_sync(false, false, false, &[Applied::Proceeded]),
+            OpenDecision::Ask
         );
     }
 }

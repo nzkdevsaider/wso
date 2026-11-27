@@ -53,6 +53,7 @@ Or invoke a subcommand directly:
 | `wso migrate` | Convert Steam's legacy `.url` shortcuts into real `.lnk` files.    |
 | `wso clean`   | Remove every shortcut `wso` created — nothing else.                |
 | `wso status`  | Scan your libraries and report what exists and what is out of sync.|
+| `wso open`    | Open the configured shortcut destination folder(s) in Explorer.    |
 
 > [!TIP]
 > Add `--dry-run` to `sync`, `migrate`, or `clean` to preview pending changes without modifying your Desktop or Start Menu.
@@ -67,6 +68,7 @@ Or invoke a subcommand directly:
 --platforms <LIST>      comma-separated: steam,epic
 --dry-run               preview changes without modifying shortcuts
 --yes                   skip confirmation prompts
+--open                  open destination folder(s) in Explorer after syncing
 ```
 
 Passing any of `--target`, `--organize`, or `--yes` skips the interactive wizard and runs non-interactively, making `wso` easy to use in scripts and scheduled tasks.

@@ -30,6 +30,7 @@ fn main() {
         Command::Migrate => commands::migrate(&cli),
         Command::Clean => commands::clean(&cli),
         Command::Status => commands::status(&cli),
+        Command::Open => commands::open(&cli),
     };
 
     std::process::exit(code);

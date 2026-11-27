@@ -141,6 +141,33 @@ pub fn managed_dirs(base: &Path, org: &Organization) -> Vec<PathBuf> {
     }
 }
 
+/// Top-level folder where shortcuts for `org` are placed under `base`.
+///
+/// For `Flat` and `PerPlatform { parent: None }`, that is `base` itself; for
+/// `Unified` and `PerPlatform { parent: Some(_) }`, it is the named subfolder
+/// so opening it in Explorer shows the whole collection rather than only one
+/// platform's subdirectory.
+pub fn destination_dir(base: &Path, org: &Organization) -> PathBuf {
+    match org {
+        Organization::Flat | Organization::PerPlatform { parent: None } => base.to_path_buf(),
+        Organization::Unified { folder } => base.join(sanitize_filename(folder)),
+        Organization::PerPlatform { parent: Some(p) } => base.join(sanitize_filename(p)),
+    }
+}
+
+/// Deduplicated destination folders for every resolved target, preserving
+/// target order.
+pub fn collect_destination_dirs(bases: &[(Target, PathBuf)], org: &Organization) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for (_, base) in bases {
+        let dir = destination_dir(base, org);
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs
+}
+
 /// Produces a unique, filesystem-safe basename for each entry, in input order.
 ///
 /// Two games can legitimately share a title across platforms, and sanitization
@@ -433,6 +460,53 @@ mod tests {
             start.to_string_lossy().contains("AppData"),
             "must be the per-user Start Menu, got {}",
             start.display()
+        );
+    }
+
+    #[test]
+    fn destination_dir_matches_organization_root() {
+        let base = PathBuf::from(r"C:\StartMenu");
+        assert_eq!(destination_dir(&base, &Organization::Flat), base);
+        assert_eq!(
+            destination_dir(
+                &base,
+                &Organization::Unified {
+                    folder: "Games".into()
+                }
+            ),
+            base.join("Games")
+        );
+        assert_eq!(
+            destination_dir(
+                &base,
+                &Organization::PerPlatform {
+                    parent: Some("My:Games".into())
+                }
+            ),
+            base.join("My Games")
+        );
+        assert_eq!(
+            destination_dir(&base, &Organization::PerPlatform { parent: None }),
+            base
+        );
+    }
+
+    #[test]
+    fn collect_destination_dirs_deduplicates_preserving_order() {
+        let bases = vec![
+            (Target::Desktop, PathBuf::from(r"C:\Same")),
+            (Target::StartMenu, PathBuf::from(r"C:\Same")),
+            (Target::StartMenu, PathBuf::from(r"C:\Other")),
+        ];
+        let org = Organization::Unified {
+            folder: "Games".into(),
+        };
+        assert_eq!(
+            collect_destination_dirs(&bases, &org),
+            vec![
+                PathBuf::from(r"C:\Same\Games"),
+                PathBuf::from(r"C:\Other\Games"),
+            ]
         );
     }
 }
